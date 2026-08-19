@@ -1,0 +1,122 @@
+{
+  "id": "root",
+  "type": "container",
+  "flexDirection": "column",
+  "width": "100%",
+  "height": "100%",
+  "debug": {
+    "ALL": false,
+    "pivotNode": "main_workspace",
+    "maxDepth": 1
+  },
+   "children": [
+    {
+      "id": "101",
+      "type": "slot",
+      "component": "dashboard",
+      "componentTypeId": 1,
+      "enable": true,
+      "visible": true,
+      "width": "100%",
+      "height": "5",
+      "displayIndex": 1
+    },
+    {
+      "id": "main_workspace",
+      "type": "container",
+      "flexDirection": "row",
+      "width": "100%",
+      "height": "16",
+      "children": [
+        {
+          "id": "100",
+          "type": "slot",
+          "component": "dashboard",
+          "componentTypeId": 1,
+          "enable": true,
+          "visible": true,
+          "width": "4",
+          "height": "100%",
+          "displayIndex": 7
+        },
+        {
+          "id": "102",
+          "type": "slot",
+          "component": "explorer",
+          "componentTypeId": 2,
+          "enable": true,
+          "visible": true,
+          "width": "35%",
+          "height": "100%",
+          "stackSize": 4,
+          "displayIndex": 2
+        },      {
+          "id": "102",
+          "type": "slot",
+          "component": "explorer",
+          "componentTypeId": 2,
+          "enable": true,
+          "visible": true,
+          "width": "35%",
+          "height": "100%",
+          "stackSize": 4,
+          "displayIndex": 2
+        },
+        {
+          "id": "103",
+          "type": "slot",
+          "component": "explorer",
+          "componentTypeId": 2,
+          "enable": true,
+          "visible": true,
+          "width": "35%",
+          "height": "100%",
+          "stackSize": 4,
+          "displayIndex": 3
+        },
+        {
+          "id": "right_sidebar",
+          "type": "container",
+          "flexDirection": "column",
+          "width": "30%",
+          "height": "100%",
+          "children": [
+            {
+              "id": "106",
+              "type": "slot",
+              "component": "theme",
+              "componentTypeId": 5,
+              "enable": true,
+              "visible": true,
+              "width": "100%",
+              "height": "100%",
+              "displayIndex": 4
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "105",
+      "type": "slot",
+      "component": "command",
+      "componentTypeId": 3,
+      "enable": true,
+      "visible": true,
+      "width": "100%",
+      "height": "3",
+      "displayIndex": 5
+    },
+    {
+      "id": "108",
+      "type": "slot",
+      "component": "logger",
+      "componentTypeId": 4,
+      "enable": true,
+      "visible": true,
+      "width": "100%",
+      "height": "20%",
+      "displayIndex": 6
+    }
+  ]
+}

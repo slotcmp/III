@@ -1,0 +1,48 @@
+{
+  "view": {
+    "bOff": {
+      "content": true,
+      "frameContour": false,
+      "frameMetrics": false,
+      "debugMouse": false
+    }
+  },
+  "ttni": {
+    "bOff": true,
+    "bTrace": false,
+    "bLogsIgnore": true,
+    "bCaller": false,
+    "bKeyLogBypass": true,
+    "bSlotLogBypass": true,
+    "pivotNode": "main_workspace",
+    "maxDepth": 1
+  },
+  "logLevelMsk": {
+    "BOOT_SEQUENCE": "INFO",
+    "VFS_REDUCER": "INFO",
+    "CORE_CLOCK_TAKT_BEFORE": "NONE",
+    "CORE_CLOCK_TAKT_AFTER": "NONE",
+    "dispatch_gate": "INFO",
+    "WORKER_GEOMETRY": "INFO",
+    "WORKER_VFS": "INFO",
+    "UNCAUGHT_EXCEPTION": "ERROR",
+    "PLATFORM_MOUSE": "INFO",
+    "GPSS_GENERATE": "INFO",
+    "GPSS_SHIPPED": "INFO",
+    "UPDATE_VIEW": "NONE"
+  },
+  "lastFocusedSlotId": "105",
+  "activeThemeIdx": 2,
+  "s102_paths": [
+    "C:\\\\",
+    "C:\\\\",
+    "C:\\\\",
+    "C:\\\\"
+  ],
+  "s103_paths": [
+    "C:\\\\",
+    "C:\\\\",
+    "C:\\\\",
+    "C:\\\\"
+  ]
+}

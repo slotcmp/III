@@ -1,0 +1,31 @@
+{
+  "project": "slotCmp (Слот-Композитор / бывш. slotcmd, reflecmd)",
+  "revision": "#0819-NIGHT-BURST-STABLE",
+  "paradigm": "PAC / Pure DOD / 0% OOP / 0% try-catch / 0% RegExp / Reactive Interrupts",
+  "interferer": {
+    "architect": "Дед Андрей (экс-флешер, покадровый blit-расчет растра)",
+    "heritage": "Академическая школа профессора Е. М. Кудрявцева (Теория очередей СМО, GPSSWorld)"
+  },
+  "current_hardware_status": {
+    "core_bus": "src/core/smo/bus.js -> Переведен на реактивный APIC-арбитраж прерываний. Прогрев идет в 2 прохода: сначала бизнес-IRQ (9, 102, 103), финальным шагом кадра — Канал 1 отрисовки.",
+    "clock_generator": "index.js -> Полностью ликвидирован холостой setInterval. Контур реактивный, завязан на tty_byte_scanner.js и события ОС Windows.",
+    "flusher_unit": "src/io/terminal/flusher.js -> Интегрирован бережный перенос фазы теневого ОЗУ-зеркала при горизонтальных и диагональных сдвигах. Очистка \\x1b[2J вырезана, мерцание ConPTY подавлено на 100%, внедрен чистый двойной буфер и концепция грязного пикселя.",
+    "vfs_bridge": "Канал 11 (watch_unit) УНИЧТОЖЕН как мусорный рудимент. src/workers/vfs_worker.js (исправлен краш преаллокации массива) пушит СМО-транзакты INJECT_VFS_DATA напрямую в контроллер проводника.",
+    "layout_engine": "src/workers/layout_worker.js -> Исправлен сбой считывания process.stdout. Метрики ConPTY берутся строго из IPC-пакетов, калькулятор стабильно возвращает флекс-карту."
+  },
+  "file_system_mapping": {
+    "index.js": "3.3.3-RELEASE-SMO-BOOTSTRAP-GATEWAY-FIXED (appSettings наливаются ДО регистрации приборов, bSlotLogBypass глушит регистрационный шум в smo.log)",
+    "src/core/smo/bus.js": "3.5.1-RELEASE-SMO-REACTIVE-PRIORITY-BUS (Приоритетный конвейер)",
+    "src/core/smo/resize_unit.js": "3.2.2-RELEASE-SMO-RESIZE-PURE-TRANSACT-RESOLVED (Пассивный ASYNC-маршаллер параметров ctx.w / ctx.h)",
+    "src/io/terminal/flusher.js": "3.3.0-RELEASE-SMO-FLUSHER-TENSOR-DIAGONAL (Двойной буфер фаз)",
+    "src/io/terminal/tty_byte_scanner.js": "6.8.8-RELEASE-SMO-SCANNER-ALT-REACTIVE (Реактивный разбор Tab и Alt+1..6 с выстрелом EXECUTE_RENDER)",
+    "src/io/terminal/tty_mouse_parser.js": "3.0.0-RELEASE-SMO-MOUSE-PARSER-REACTIVE (DOD хит-тест кликов по флекс-сетке и бирюзовым шапкам вкладок T1..T4)",
+    "src/core/slot_maker.js": "3.0.2-RELEASE-DOD-FORK-CTL-FIXED (Импорты синхронизированы с именами *_ctl.js)",
+    "src/core/smo/root_intent_init.js": "3.2.0-RELEASE-SMO-ROOT-INIT-AUTOMATIC (Ликвидирован хардкод, сборка слотов идет авто-обходом дерева layout.json)"
+  },
+  "next_tact_tasks": [
+    "1. Настройка animation_worker.js и пассивного рендерера в src/modules/dashboard/dashboard_view.js для прорисовки шкал линейки и плавного подплыва красной стрелки ▼ при кликах мыши.",
+    "2. Добавление нового левого вертикального дашборда '100' под кодовым именем v_slider (фиксированная ширина 4 знакоместа).",
+    "3. Финализация viewportOffset (плавный вертикальный скролл файлов) по стрелочкам вверх/вниз в explorer_ctl.js."
+  ]
+}
