@@ -119,3 +119,7 @@
 
 ```
 ![Интерфейс ядра slotcmp III](./images/slotcmp.png)
+<<<<<<< HEAD
+=======
+
+>>>>>>> 3e215e0cbc6929d3b58cd02b1d34664036112d15
