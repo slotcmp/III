@@ -117,5 +117,5 @@
                                           ▼ (Атомарное выжигание 0% Polling)
                                    fs.writeSync(1)
 
-![Принципиальная схема ядра slotcmp III](C://slotcmp//III//images//slotcmp.png)
+![Принципиальная схема ядра slotcmp III]([https://github.com/slotcmp/III/blob/main/images/slotcmp.png)]
 ```
