@@ -1,5 +1,5 @@
 /**
- * @file src/modules/command/command_controller.js
+ * @file src/modules/command/command_ctl.js
  * @version 3.0.1-RELEASE-SMO-COMMAND-CONTROLLER-SYNCHRONOUS
  * @description Контроллер и фазовый фильтр СМО-прибора обслуживания Канала 105 (Command Line).
  * Синхронно разбирает CLI-команды ввода и маршрутизирует транзакты без try/catch.

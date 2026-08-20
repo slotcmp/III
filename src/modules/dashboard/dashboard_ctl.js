@@ -1,6 +1,6 @@
 /**
- * @file src/modules/dashboard/dashboard_controller.js
- * @version 3.0.1-RELEASE-SMO-DASHBOARD-CONTROLLER-SYNCHRONOUS
+ * @file src/modules/dashboard/dashboard_ctl.js
+ * @version 3.0.1-RELEASE-SMO-DASHBOARD-ctl
  * @description Контроллер и фазовый фильтр СМО-прибора обслуживания Канала 101 (Dashboard).
  * Переключает под-вкладки мониторинга ресурсов ядра без разрыва такта Event Loop.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.

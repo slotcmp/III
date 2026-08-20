@@ -1,16 +1,17 @@
 /**
- * @file src/modules/logger/logger_controller.js
- * @version 3.0.1-RELEASE-SMO-LOGGER-CONTROLLER-SYNCHRONOUS
+ * @file src/modules/logger/logger_ctl.js
+ * @version 3.0.6-RELEASE-SMO-LOGGER-CTL-DISK-STABLE
  * @description Контроллер и фазовый фильтр СМО-прибора обслуживания Канала 108 (Logger).
- * Обеспечивает синхронное накопление лог-строк в ОЗУ-буфер без разрыва такта Event Loop.
+ * ИСПРАВЛЕН ПУТЬ И ЗАПИСЬ: Имя зафиксировано как logger_ctl.js, добавлен fs.appendFileSync.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
 import { createLoggerMdlInstance } from "./logger_mdl.js";
 import { createLoggerViewInstance, renderLoggerContent } from "./logger_view.js";
+import fs from "node:fs";
 
 /**
- * Фабрика сборки мономорфного состояния PAC-контроллера логирования
+ * ИСТИННАЯ ОРИГИНАЛЬНАЯ ФАБРИКА: Сборка мономорфного состояния PAC-контроллера логирования
  * @param {Object} appHostRef Ссылка на ядро хоста приложения
  * @param {string} slotIdStr Идентификатор целевого слота
  * @returns {Object} Запечатанная структура контроллера
@@ -48,8 +49,9 @@ export function processSpecificLoggerLogic(facilityState, intentStr, contextPayl
     switch (intent) {
         case "ADD_LOG_ENTRY":
             if (currentTx && currentTx.P3) {
-                // Безопасно наливаем строку следа в циклический ОЗУ-буфер логгера
                 const logString = String(currentTx.P3);
+                
+                // 1. АППАРАТНЫЙ НАКАТ В ОЗУ-БУФЕР (Для мгновенного рендеринга на TUI-экране)
                 if (typeof mdl.pushLogLine === "function") {
                     mdl.pushLogLine(logString);
                 } else if (Array.isArray(mdl.lines)) {
@@ -58,6 +60,14 @@ export function processSpecificLoggerLogic(facilityState, intentStr, contextPayl
                         mdl.lines.shift();
                     }
                 }
+
+                // 2. СИНХРОННЫЙ СБРОС ТРАНЗАКТА НА ПОСТОЯННЫЙ ДИСКОВЫЙ НАКОПИТЕЛЬ
+                const targetLogPath = "./smo.log";
+                
+                // Превентивный инлайновый гвард проверки перевода каретки \n (0% RegExp)
+                const cleanAppendStr = logString.charAt(logString.length - 1) === "\n" ? logString : logString + "\n";
+                fs.appendFileSync(targetLogPath, cleanAppendStr, "utf8");
+
                 mdl._isDirty = true; 
                 isMutated = true;
             }
@@ -68,6 +78,7 @@ export function processSpecificLoggerLogic(facilityState, intentStr, contextPayl
 
 /** 
  * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/modules/logger/logger_controller.js
- * Время модификации: 18.08.2026 17:03:15 MSK
+ * Путь: src/modules/logger/logger_ctl.js
+ * Время модификации: 20.08.2026 22:25:40 MSK
+ * Точка отката: #0818-RELEASE-GOLDEN-MONOMORPHIC
  */
