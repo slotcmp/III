@@ -1,6 +1,21 @@
-﻿// 1. Добавьте импорт в верхнюю часть src/io/terminal/blit.js
-import { inject_v_slider_raster } from "../../modules/v_slider/v_slider_ctl.js";
+﻿/**
+ * @file src/io/terminal/blit.js
+ * @version 3.0.1-RELEASE-SMO-VIEWPORT-BLIT-PASSTHROUGH
+ * @description Чистая пассивная процедура выжигания экранных буферов (Control/Presentation).
+ * Извлекает скомпонованный растр Юникод-матрицы из дерева и направляет в TTY-флушер.
+ * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
+ */
 
+import { synchronizeDisplayTree } from "./tree_builder.js";
+import { flushVirtualCanvasToTty } from "./flusher.js";
+
+/**
+ * Извлекает и синхронизирует итоговую TUI-матрицу для отправки в физический дескриптор терминала
+ * @param {Object} virtualCanvasState Состояние виртуального холста ConPTY
+ * @param {Object} host Ссылка на рантайм ядра хоста
+ * @param {Object} geoMap Актуальная рассчитанная карта геометрии ОЗУ
+ * @returns {boolean} Флаг успешности отправки кадра
+ */
 export function executeViewportBlit(virtualCanvasState, host, geoMap) {
     if (!virtualCanvasState || !host || !geoMap) return false;
 
@@ -10,10 +25,12 @@ export function executeViewportBlit(virtualCanvasState, host, geoMap) {
     const maxRows = Math.floor(rootDisplayNode.h || 30);
     const maxCols = Math.floor(rootDisplayNode.w || 120);
 
-    // 2. КРИТИЧЕСКИЙ ИНЖЕКТ: Накатываем растр слайдера поверх флекс-карты дерева перед флешем
-    inject_v_slider_raster(rootDisplayNode.matrix, maxCols, maxRows);
-
-    // Отправляем модифицированную матрицу в оригинальный рабочий флушер
     flushVirtualCanvasToTty(virtualCanvasState, rootDisplayNode.matrix, maxRows, maxCols);
     return true;
 }
+
+/** 
+ * ПАСПОРТ ЛИСТИНГА:
+ * Путь: src/io/terminal/blit.js
+ * Время модификации: 18.08.2026 16:42:10 MSK
+ */

@@ -1,8 +1,8 @@
 /**
  * @file src/core/app_host_factory.js
- * @version 3.0.4-RELEASE-SMO-HOST-FACTORY-DOD
+ * @version 3.4.6-RELEASE-SMO-HOST-FACTORY-STABLE-FINAL
  * @description Фабрика сборки мономорфной структуры хоста приложения ( PAC / Control-контур ).
- * Аллоцирует плоские TUI-матрицы ОЗУ, запечатывает структуры и регистрирует приборы обслуживания СМО.
+ * ИСПРАВЛЕН CLI-ВВОД: Свойства buffer и cursor жестко внедрены в Hidden Class mockMdl до запечатывания.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
@@ -12,6 +12,9 @@ import { executeViewportBlit } from "../io/terminal/blit.js";
 import { assemble as assembleResizeUnit } from "./smo/resize_unit.js";
 import { assemble as assembleRootUnit } from "./smo/root_unit.js";
 import { assemble as assembleRenderUnit } from "./smo/render_unit.js";
+
+// Импортируем сборщик системного прибора мыши Слота 10
+import { assembleMouseUnit } from "./smo/mouse_worker_unit.js";
 
 /**
  * Выделение плоской мономорфной TUI-матрицы знакомест фиксированного размера в ОЗУ хоста
@@ -71,12 +74,17 @@ export function createHostState(gpssEngineRef) {
                 hostState.workerGateway.initWorkers();
             }
             
-            // 1. АППАРАТНАЯ РЕГИСТРАЦИЯ ИНФРАСТРУКТУРНЫХ ПРИБОРОВ СМО (Каналы 0, 1, 9, 11)
+            // 1. АППАРАТНАЯ РЕГИСТРАЦИЯ ИНФРАСТРУКТУРНЫХ ПРИБОРОВ СМО (Системный диапазон 0-99)
             registerGpssFacility("0", assembleRootUnit(hostState));
             registerGpssFacility("1", assembleRenderUnit(hostState));
             registerGpssFacility("9", assembleResizeUnit(hostState));
 
-            // 2. ДИНАМИЧЕСКИЙ ДЕХАРДКОД: Налив бизнес-приборов строго по ОЗУ-реестру панелей
+            // АТОМАРНЫЙ ИНЖЕКТ: Бутстрап системного Слота 10 (Шлюз прерываний мыши)
+            if (typeof assembleMouseUnit === "function") {
+                registerGpssFacility("10", assembleMouseUnit(hostState));
+            }
+
+            // 2. ДИНАМИЧЕСКИЙ ДЕХАРДКОД: Налив бизнес-приборов (100+) строго по ОЗУ-реестру панелей
             const activeSlots = Object.keys(hostState.model.logicalState.panelRegistry);
             
             for (let i = 0; i < activeSlots.length; i++) {
@@ -93,17 +101,29 @@ export function createHostState(gpssEngineRef) {
                     dispatch: () => false
                 };
                 
+                // ПРОГРЕВ ФОРМЫ ХЭША: Поля объявлены на фазе аллокации для common_input_engine.js
                 const mockMdl = { 
                     _isDirty: true, 
                     itemsList: [], 
                     lines: [], 
+                    
+                    // Решение для CLI-ввода: инжектируем свойства Hidden Class до запечатывания
                     buffer: "", 
                     cursor: 0, 
+                    textLength: 0,
+                    cursorX: 0,
+                    
                     charBuffer: new Array(256) 
                 };
                 for (let k = 0; k < 256; k++) mockMdl.charBuffer[k] = " ";
                 
-                const mockView = { slotId: id, width: 40, height: 5, localBuffer: allocateMonomorphicTuiMatrix() };
+                const mockView = { 
+                    slotId: id, 
+                    width: 40, 
+                    height: 5, 
+                    _isFocused: (id === "105"), // По умолчанию активируем каретку для CLI
+                    localBuffer: allocateMonomorphicTuiMatrix() 
+                };
                 
                 Object.preventExtensions(mockView); 
                 Object.preventExtensions(mockMdl);
@@ -144,5 +164,6 @@ export function createHostState(gpssEngineRef) {
 /** 
  * ПАСПОРТ ЛИСТИНГА:
  * Путь: src/core/app_host_factory.js
- * Время модификации: 18.08.2026 16:38:15 MSK
+ * Время модификации: 20.08.2026 21:35:40 MSK
+ * Номер для отката: #0820-STABLE-SYSTEM-MOUSE-CLASSIFIER
  */

@@ -102,7 +102,6 @@ export function generateGpssTransaction(targetChannelStr, intentStr, contextPayl
 
     return true;
 }
-
 /**
  * Автомат сквозного реактивного продвижения активных прерываний с приоритетом рендеринга
  */
@@ -110,45 +109,52 @@ function executeReactivePulsePipeline() {
     if (_gpssEngineState.isScanActive) return;
     _gpssEngineState.isScanActive = true;
     
-    let screenNeedsUpdate = false;
     const activeFacilitiesKeys = Array.from(_gpssEngineState.facilitiesRegistry.keys());
     
-    // ПРОХОД 1: Опрашиваем строго координатные и бизнес-приборы (Каналы 0, 9, 101+), исключая Канал 1 и 4
+    // ПРОХОД 1: Продвигаем координатные, бизнес-приборы и инфраструктурный Канал 4
     for (let i = 0; i < activeFacilitiesKeys.length; i++) {
         const slotKey = activeFacilitiesKeys[i];
-        if (slotKey === "1" || slotKey === "4") {
+        
+        // ИСПРАВЛЕНИЕ: Пропускаем только Канал 1 (рендер), Канал 4 обязан продвигаться!
+        if (slotKey === "1") {
             continue; 
         }
         
         const facility = _gpssEngineState.facilitiesRegistry.get(slotKey);
         if (facility && typeof facility.advanceFacility === "function") {
-            const isMutated = facility.advanceFacility();
-            if (isMutated === true) {
-                screenNeedsUpdate = true;
-            }
+            facility.advanceFacility();
         }
     }
     
-    // ПРОХОД 2: ФИНАЛЬНЫЙ СМО-БАРЬЕР — продвигаем Прибор Отрисовки (Канал 1) гарантированно последним,
-    // когда все транзакты инжекции геометрии от воркеров уже полностью разгребли кучу ОЗУ!
+    // ПРОХОД 2: ФИНАЛЬНЫЙ СМО-БАРЬЕР — продвигаем Прибор Отрисовки (Канал 1) гарантированно последним
     const renderUnit = _gpssEngineState.facilitiesRegistry.get("1");
     if (renderUnit && typeof renderUnit.advanceFacility === "function") {
-        const isRenderMutated = renderUnit.advanceFacility();
-        if (isRenderMutated === true) {
-            screenNeedsUpdate = true;
-        }
+        renderUnit.advanceFacility();
     }
     
     _gpssEngineState.isScanActive = false;
 
-    // ФИНАЛИЗАЦИЯ ИМПУЛЬСА: Выталкиваем полностью сформированный растр кадра в ConPTY дескриптор
-    if (screenNeedsUpdate === true && _gpssEngineState.runtime) {
+    // Выталкиваем сформированный растр кадра безусловно при каждом реактивном прерывании
+    if (_gpssEngineState.runtime) {
         const kernel = _gpssEngineState.runtime;
         if (typeof kernel.executeViewportBlit === "function") {
             kernel.executeViewportBlit();
         }
     }
 }
+
+/** 
+ * ПАСПОРТ ЛИСТИНГА:
+ * Путь: src/core/smo/bus.js
+ * Время модификации: 20.08.2026 18:31:05 MSK
+ */
+
+
+/** 
+ * ПАСПОРТ ЛИСТИНГА:
+ * Путь: src/core/smo/bus.js
+ * Время модификации: 20.08.2026 18:31:05 MSK
+ */
 
 /** 
  * ПАСПОРТ ЛИСТИНГА:

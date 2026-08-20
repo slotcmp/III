@@ -1,8 +1,8 @@
 /**
  * @file src/core/smo/keyboard_worker_unit.js
- * @version 3.2.5-RELEASE-SMO-KEYBOARD-ALT-FOCUS-FIXED
+ * @version 3.2.0-RELEASE-SMO-KEYBOARD-INTERACTIVE
  * @description Инфраструктурный клавиатурный СМО-прибор Канала 4 (Control-контур).
- * Исправлена ошибка разбора аккордов Alt+1..6 путем прецизионного сравнения с байтом \x1b.
+ * Изменена локальная логика прибора: интегрирован разбор ANSI-стрелок навигации и Tab-смены панелей.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP.
  */
 
@@ -65,13 +65,23 @@ export function advanceQueueFacility(unitState) {
         const keyPayload = tx.P3;
         const keyName = String(keyPayload.name || "");
 
-        // 1. ПРЕЦИЗИОННЫЙ РАЗБОР АККОРДОВ ALT + N (1..6)
-        // Исправлено: сравниваем с реальным непечатным символом escape (\x1b), длина которого 1 байт
-        if (keyName.length === 2 && keyName.charCodeAt(0) === 27) {
+        // 1. ПОСИМВОЛЬНЫЙ РАЗБОР ANSI ESC-ПОСЛЕДОВАТЕЛЬНОСТЕЙ СТРЕЛОК НАВИГАЦИИ ТЕРМИНАЛА
+        if (keyName === "\x1b[A" || keyName === "up") {
+            generateGpssTransaction(focusedSlotIdStr, "MOVE_CURSOR_UP", null);
+            isMutated = true;
+            continue;
+        }
+        if (keyName === "\x1b[B" || keyName === "down") {
+            generateGpssTransaction(focusedSlotIdStr, "MOVE_CURSOR_DOWN", null);
+            isMutated = true;
+            continue;
+        }
+
+        // 2. РАЗБОР АККОРДOВ ФOКУСA ALT + N (1..6)
+        if (keyName.length === 2 && keyName.charAt(0) === "\x1b") {
             const digitChar = keyName.charAt(1);
             const byteCode = digitChar.charCodeAt(0);
             
-            // Проверяем диапазон символов от '1' (0x31) до '6' (0x36)
             if (byteCode >= 0x31 && byteCode <= 0x36 && kernel?.model?.logicalState?.panelRegistry) {
                 const requestedDisplayIndex = byteCode - 0x30;
                 const registry = kernel.model.logicalState.panelRegistry;
@@ -89,28 +99,11 @@ export function advanceQueueFacility(unitState) {
                 if (targetSlotIdStr.length > 0) {
                     kernel.model.logicalState.focusedSlotId = targetSlotIdStr;
                     focusedSlotIdStr = targetSlotIdStr;
-                    
-                    // Принудительно сбрасываем кэш фазы diff-рендеринга, чтобы старая и новая рамки перерисовались
-                    if (typeof forceInvalidateShadowCanvas === "function") {
-                        forceInvalidateShadowCanvas();
-                    }
-                    
+                    if (typeof forceInvalidateShadowCanvas === "function") forceInvalidateShadowCanvas();
                     generateGpssTransaction("1", "EXECUTE_RENDER", null);
                     isMutated = true;
                 }
             }
-            continue;
-        }
-
-        // 2. ПОСИМВОЛЬНЫЙ РАЗБОР ANSI ESC-ПОСЛЕДОВАТЕЛЬНОСТЕЙ СТРЕЛОК НАВИГАЦИИ ТЕРМИНАЛА
-        if (keyName === "\x1b[A" || keyName === "up") {
-            generateGpssTransaction(focusedSlotIdStr, "MOVE_CURSOR_UP", null);
-            isMutated = true;
-            continue;
-        }
-        if (keyName === "\x1b[B" || keyName === "down") {
-            generateGpssTransaction(focusedSlotIdStr, "MOVE_CURSOR_DOWN", null);
-            isMutated = true;
             continue;
         }
 
@@ -156,5 +149,5 @@ export function advanceQueueFacility(unitState) {
 /** 
  * ПАСПОРТ ЛИСТИНГА:
  * Путь: src/core/smo/keyboard_worker_unit.js
- * Время модификации: 19.08.2026 00:15:30 MSK
+ * Время модификации: 18.08.2026 21:46:45 MSK
  */

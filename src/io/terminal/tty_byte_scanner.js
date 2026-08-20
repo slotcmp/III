@@ -1,8 +1,8 @@
 /**
  * @file src/io/terminal/tty_byte_scanner.js
- * @version 6.8.8-RELEASE-SMO-SCANNER-ALT-REACTIVE
+ * @version 6.8.7-RELEASE-SMO-SCANNER-KEYLOGS-PURE-DOD
  * @description Низкоуровневый посимвольный автомат разбора ANSI/ESC/CSI байтовых потоков ввода.
- * Исправлен баг активации рамок при Alt+1..6: инжектирован реактивный транзакт EXECUTE_RENDER на Канал 1.
+ * Осуществляет динамическое вычисление фокуса панелей по полю displayIndex без хардкода.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
@@ -61,22 +61,7 @@ function _processBaseStreamState(byte, focusedSlotIdStr, kernel) {
     }
     if (byte === 0x09) {
         _scannerState.pendingUtf8LeadByte = 0;
-        
-        // Принудительно инвалидируем теневое зеркало, чтобы Tab-навигация мгновенно перерисовывала фокус окон
-        if (typeof forceInvalidateShadowCanvas === "function") {
-            forceInvalidateShadowCanvas();
-        }
-        
-        // Изменение фокуса между панелями 102 <-> 103 по кнопке Tab
-        if (focusedSlotIdStr === "102") {
-            kernel.model.logicalState.focusedSlotId = "103";
-        } else if (focusedSlotIdStr === "103") {
-            kernel.model.logicalState.focusedSlotId = "102";
-        } else {
-            generateGpssTransaction(focusedSlotIdStr, "ROTATE_SLOT_STACK", null);
-        }
-        
-        generateGpssTransaction("1", "EXECUTE_RENDER", null);
+        generateGpssTransaction(focusedSlotIdStr, "ROTATE_SLOT_STACK", null);
         return;
     }
     if (byte >= 0x20 && byte < 0x7f) {
@@ -98,13 +83,14 @@ function _processEscPrefixState(byte, kernel) {
     } else {
         _scannerState.state = 0;
         
-        // ДИНАМИЧЕСКИЙ ДЕКОДЕР ALT + 1..6
+        // ДИНАМИЧЕСКИЙ ДЕКОДЕР ALT + 1..6: Полное исключение хардкода по Манифесту
         if (byte >= 0x31 && byte <= 0x36 && kernel.model?.logicalState?.panelRegistry) {
-            const requestedDisplayIndex = byte - 0x30; 
+            const requestedDisplayIndex = byte - 0x30; // Переводим ASCII-символ цифры в integer 1..6
             const registry = kernel.model.logicalState.panelRegistry;
             const keys = Object.keys(registry);
             let targetSlotIdStr = "";
             
+            // Находим целевой прибор на лету по его displayIndex
             for (let i = 0; i < keys.length; i++) {
                 const id = keys[i];
                 if (registry[id] && registry[id].displayIndex === requestedDisplayIndex) {
@@ -115,15 +101,8 @@ function _processEscPrefixState(byte, kernel) {
             
             if (targetSlotIdStr.length > 0) {
                 kernel.model.logicalState.focusedSlotId = targetSlotIdStr;
-                
-                // Сбрасываем кэш, чтобы старая и новая рамки гарантированно пересчитали фазу цвета
-                if (typeof forceInvalidateShadowCanvas === "function") {
-                    forceInvalidateShadowCanvas();
-                }
-                
-                // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Вместо слепого блайтинга выстреливаем СМО-транзакт рендеринга.
-                // Приоритетная шина сама подхватит импульс и чисто выведет золото рамок на экран!
-                generateGpssTransaction("1", "EXECUTE_RENDER", null);
+                if (typeof forceInvalidateShadowCanvas === "function") forceInvalidateShadowCanvas();
+                if (typeof kernel.executeViewportBlit === "function") kernel.executeViewportBlit();
             }
         }
     }
@@ -156,5 +135,5 @@ function _processCsiState(byte, focusedSlotIdStr, kernel) {
 /** 
  * ПАСПОРТ ЛИСТИНГА:
  * Путь: src/io/terminal/tty_byte_scanner.js
- * Time-stamp: 19.08.2026 00:24:00 MSK
+ * Время модификации: 18.08.2026 17:42:01 MSK
  */
