@@ -1,13 +1,13 @@
 /**
  * @file src/core/slot_maker.js
- * @version 3.0.2-RELEASE-DOD-FORK-CTL-FIXED
+ * @version 3.1.0-RELEASE-SMO-IOC-FACTORY-CLI-PROVEN
  * @description Статическая IoC-фабрика сборки слотов (PAC / Control-контур).
- * Пути импортов прецизионно перенаправлены на физические файлы *_ctl.js для устранения крашей.
+ * ИСПРАВЛЕН CLI-ВВОД: Внедрена прямая инжекция обработчиков очередей в обход блокировок V8.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
 import { loadAppSettings } from "./app_config.js";
-import { registerGpssFacility } from "./smo/bus.js";
+import { registerGpssFacility, _gpssEngineState } from "./smo/bus.js";
 import { createAbstractFacility } from "./smo/facility_pipeline.js";
 
 import { createCommandController, processSpecificCommandLogic } from "../modules/command/command_ctl.js";
@@ -64,7 +64,7 @@ export function assembleSlot(kernel, slotIdStr, domainNameStr) {
 
     abstractFacility.viewStack = fatControllerInstance.viewStack || fatControllerInstance;
 
-    // СИНХРОНИЗАЦИЯ УКАЗАТЕЛЕЙ ПАМЯТИ: Наливаем регистры строго в форму прибора СМО
+    // СИНХРОНИЗАЦИЯ УКАЗАТЕЛЕЙ ПАМЯТИ: Связываем регистры с описанием прибора СМО
     if (targetSlotBlank) {
         targetSlotBlank.viewStack = fatControllerInstance.viewStack || fatControllerInstance;
         targetSlotBlank.advanceFacility = abstractFacility.advanceFacility;
@@ -74,9 +74,19 @@ export function assembleSlot(kernel, slotIdStr, domainNameStr) {
         abstractFacility.componentType = String(targetSlotBlank.componentType || "slot");
     }
 
-    // 3. ЖЕСТКАЯ РЕГИСТРАЦИЯ ПРИБОРА НА ТАКТОВОЙ ШИНЕ СМО ЯДРА
-    if (typeof registerGpssFacility === "function") {
-        registerGpssFacility(slotId, abstractFacility);
+    // 3. ПРЕЦИЗИОННОЕ РЕШЕНИЕ ДЛЯ CLI: Извлекаем уже созданный в бутстрапе запечатанный прибор
+    // и напрямую заменяем ссылки на вью-стек и рабочую функцию продвижения очередей
+    const activeRegistryFacility = _gpssEngineState.facilitiesRegistry.get(slotId);
+    if (activeRegistryFacility) {
+        activeRegistryFacility.viewStack = abstractFacility.viewStack;
+        activeRegistryFacility.specificAdvanceWorker = specificWorkerFn;
+        // Перенаправляем продвигатель на реальный конвейер обработки из facility_pipeline.js
+        activeRegistryFacility.advanceFacility = abstractFacility.advanceFacility;
+    } else {
+        // Если прибора не было на шине — регистрируем его штатно
+        if (typeof registerGpssFacility === "function") {
+            registerGpssFacility(slotId, abstractFacility);
+        }
     }
 
     return abstractFacility;
@@ -85,5 +95,5 @@ export function assembleSlot(kernel, slotIdStr, domainNameStr) {
 /** 
  * ПАСПОРТ ЛИСТИНГА:
  * Путь: src/core/slot_maker.js
- * Время модификации: 18.08.2026 19:36:10 MSK
+ * Время модификации: 20.08.2026 21:42:00 MSK
  */

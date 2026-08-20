@@ -7,16 +7,17 @@
       "debugMouse": false
     }
   },
-  "ttni": {
+   "ttni": {
     "bOff": true,
     "bTrace": false,
     "bLogsIgnore": true,
     "bCaller": false,
-    "bKeyLogBypass": true,
+    "bKeyLogBypass": false, 
     "bSlotLogBypass": true,
     "pivotNode": "main_workspace",
     "maxDepth": 1
   },
+
   "logLevelMsk": {
     "BOOT_SEQUENCE": "INFO",
     "VFS_REDUCER": "INFO",

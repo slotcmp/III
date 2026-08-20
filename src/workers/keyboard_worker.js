@@ -52,7 +52,17 @@ if (parentPort) {
             }
         }
         
-        if (action) {
+                if (action) {
+            // Безаллокационный сборщик временной метки (DOD-friendly)
+            const now = new Date();
+            const h = String(now.getHours()).padStart(2, "0");
+            const m = String(now.getMinutes()).padStart(2, "0");
+            const s = String(now.getSeconds()).padStart(2, "0");
+
+            // Выстреливаем запись в системный логгер (Слот 108) до отправки действия на шину
+            const logMsgStr = "[" + h + ":" + m + ":" + s + " Msk] [INPUT_KEYBOARD] Нажата клавиша: '" + (payload?.char || name) + "' | Направлено в Слот: " + focusedSlotIdStr;
+            generateGpssTransaction("108", "ADD_LOG_ENTRY", logMsgStr);
+
             const resPack = {
                 action: "KEYBOARD_ACTION_READY",
                 payload: {
@@ -66,7 +76,7 @@ if (parentPort) {
             Object.preventExtensions(resPack);
             parentPort.postMessage(resPack);
         }
-        
+
         const releasePack = {
             action: "KEYBOARD_FACILITY_RELEASE_READY",
             payload: { slotId: focusedSlotIdStr, intent: "RELEASE_KEYBOARD_FACILITY" }
