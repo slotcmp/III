@@ -1,133 +1,120 @@
 /**
  * @file src/core/slot_maker.js
- * @version 6.0.0-RELEASE-SMO-IOC-ULTRA-DYNAMIC
- * @description Абсолютно динамическая IoC-фабрика сборки слотов (PAC / Control-контур).
- * СВЕРХДИНАМИКА: Имена файлов, фабрик и воркеров полностью собираются и вычисляются в рантайме.
- * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
+ * @version 9.2.0-RELEASE-SMO-IOC-MONOMORPHIC-FIXED
+ * @description Синхронный IoC-монтажник PAC-триад приборов на шину СМО (Control-контур).
+ * ИСПРАВЛЕНЫ СЛОТЫ 101/106: Массив вкладок выделяется строго для explorer, dashboard изолирован.
+ * Выполнен в строгой парадигме PAC / DOD / 0% OOP.
  */
 
-import { registerGpssFacility, _gpssEngineState, generateGpssTransaction } from "./smo/bus.js";
+import { registerGpssFacility } from "./smo/bus.js";
 import { createAbstractFacility } from "./smo/facility_pipeline.js";
 
 /**
- * ФАЗА 1: Асинхронный триггер сборки слота. Динамически вычисляет пути на основе layout.json.
- * @param {Object} kernel Ссылка на ОЗУ-рантайм ядра хоста
- * @param {string} slotIdStr Идентификатор целевого слота (например, "105")
- * @param {string} domainNameStr Наименование компонента (например, "command")
+ * Вспомогательный DOD-генератор мономорфных структур моделей данных
  */
-export function assembleSlot(kernel, slotIdStr, domainNameStr) {
-    if (!kernel || !slotIdStr || !domainNameStr) return;
-
-    const cleanDomain = String(domainNameStr).trim().toLowerCase();
-    const slotId = String(slotIdStr).trim();
-
-    // Парадигма соглашения путей: src/modules/[domain]/[domain]_ctl.js
-    const targetModulePathStr = "../modules/" + cleanDomain + "/" + cleanDomain + "_ctl.js";
-
-    // Запускаем асинхронный импорт файла триады
-    import(targetModulePathStr)
-        .then((resolvedModule) => {
-            if (!resolvedModule) return;
-
-            let foundWorkerFn = null;
-            let foundFactoryFn = null;
-
-            // БЕЗМУСОРНЫЙ СБОР ИМЕН И ССЫЛОК (0% RegExp): Сканируем ключи экспорта модуля
-            const moduleKeys = Object.keys(resolvedModule);
-            const keysLen = moduleKeys.length;
-
-            for (let i = 0; i < keysLen; i++) {
-                const keyStr = String(moduleKeys[i]);
-                
-                // Ищем воркер прерываний: имя функции обязано начинаться с "process"
-                if (keyStr.substring(0, 7) === "process") {
-                    foundWorkerFn = resolvedModule[keyStr];
-                }
-                // Ищем фабрику контроллера: имя функции обязано начинаться с "create"
-                else if (keyStr.substring(0, 6) === "create") {
-                    foundFactoryFn = resolvedModule[keyStr];
-                }
-            }
-
-            if (!foundWorkerFn || !foundFactoryFn) return;
-
-            // Упаковываем полностью вычисленные ссылки в транспортный контейнер
-            const asyncPayload = {
-                slotId: slotId,
-                cleanDomain: cleanDomain,
-                workerFn: foundWorkerFn,
-                factoryFn: foundFactoryFn
-            };
-            Object.preventExtensions(asyncPayload);
-
-            // Выстреливаем тактовый транзакт. Синхронизация и впекание — на СЛЕДУЮЩЕМ такте СМО!
-            generateGpssTransaction("0", "SYNCHRONIZE_DYNAMIC_SLOT", asyncPayload);
-        })
-        .catch((err) => {
-            if (_gpssEngineState.runtime) {
-                generateGpssTransaction("108", "ADD_LOG_ENTRY", "[IOC_DYNAMIC_ERROR] Сбой сборки " + targetModulePathStr + " | Стек: " + String(err.message));
-            }
-        });
+function allocateDomainMdl(componentTypeStr, initialPathStr = "C:/") {
+    const type = String(componentTypeStr || "").trim();
+    const baseMdl = {
+        _isDirty: true, itemsList: [], lines: [], buffer: "", cursor: 0, textLength: 0, cursorX: 0,
+        currentDirectoryPath: String(initialPathStr),
+        _cpuPercent: 35, _ramPercent: 48, _ramUsedMb: 7864, _ramTotalMb: 16384, _cpuCores: 8, totalTransactions: 0,
+        themesList: [
+            { id: 0, name: "1. CLASSIC STEEL", borderColorMsk: "gray" },
+            { id: 1, name: "2. COBALT OCEAN",  borderColorMsk: "blue" },
+            { id: 2, name: "3. AMETHYST NEON", borderColorMsk: "purple" },
+            { id: 3, name: "4. MATRIX OLIVE",  borderColorMsk: "olive" },
+            { id: 4, name: "5. DEEP CRIMSON",  borderColorMsk: "maroon" },
+            { id: 5, name: "6. MIDNIGHT NAVY", borderColorMsk: "navy" }
+        ],
+        totalThemes: 6, selectedIndex: 0, maxLines: 128, logsArray: [], totalLogsCount: 0, viewportOffset: 0,
+        charBuffer: new Array(256)
+    };
+    for (let k = 0; k < 256; k++) baseMdl.charBuffer[k] = " ";
+    if (type === "logger") { for (let i = 0; i < 128; i++) baseMdl.logsArray.push(""); }
+    const lenT = baseMdl.themesList.length;
+    for (let i = 0; i < lenT; i++) Object.preventExtensions(baseMdl.themesList[i]);
+    Object.preventExtensions(baseMdl);
+    return baseMdl;
 }
 
 /**
- * ФАЗА 2: Синхронная финализация и атомарное впекание триады на шину (Вызывается на следующем такте СМО)
- * @param {Object} kernel Ссылка на ОЗУ-рантайм ядра хоста
- * @param {Object} payload Контекст подгруженных функций из транзакта Фазы 1
- * @returns {boolean} Флаг успешности проведения мутации
+ * ФАЗА 2: Синхронная финализация и атомарный монтаж вью-стека на шину СМО
  */
 export function executeDeferredSynchronization(kernel, payload) {
     if (!kernel || !payload || !payload.slotId || !payload.cleanDomain) return false;
 
     const slotId = payload.slotId;
-    const cleanDomain = payload.cleanDomain;
+    const comp = payload.cleanDomain;
     const specificWorkerFn = payload.workerFn;
-    const createControllerFn = payload.factoryFn;
-
-    if (typeof specificWorkerFn !== "function" || typeof createControllerFn !== "function") return false;
+    const createViewFn = payload.createViewFn;
 
     const registry = kernel.model?.logicalState?.panelRegistry;
     const targetSlotBlank = registry ? registry[slotId] : null;
 
-    // 1. СИНХРОННАЯ СБОРКА АБСТРАКТНОГО ПРИБОРА ОБСЛУЖИВАНИЯ СМО
-    const abstractFacility = createAbstractFacility(kernel, slotId, specificWorkerFn);
-    if (!abstractFacility) return false;
+    // Сборка канонического абстрактного прибора СМО
+    const abstractFacility = createAbstractFacility(kernel, slotId, specificWorkerFn, comp, payload.displayIndex);
+    abstractFacility.activeStackIdx = Math.max(0, Math.floor(payload.activeStackIdx || 0));
 
-    // 2. ИНЖЕКЦИЯ СТАНДАРТИЗИРОВАННОЙ ТРИАДЫ ИЗ ПОДГРУЖЕННОГО КОНТРОЛЛЕРА
-    const fatControllerInstance = createControllerFn(kernel, slotId);
-    if (!fatControllerInstance) return false;
-
-    abstractFacility.viewStack = fatControllerInstance;
-
-    // 3. СИНХРОНИЗАЦИЯ УКАЗАТЕЛЕЙ ПАМЯТИ: Связываем регистры с описанием прибора СМО
-    if (targetSlotBlank) {
-        targetSlotBlank.viewStack = fatControllerInstance;
-        targetSlotBlank.advanceFacility = abstractFacility.advanceFacility;
+    // ПРЕЦИЗИОННАЯ АЛЛОКАЦИЯ: Массив вкладок генерируется СТРОГО для файлового менеджера explorer
+    if (comp === "explorer" && payload.tabs && Array.isArray(payload.tabs)) {
+        const tabsCount = payload.tabs.length;
+        const dynamicTabsStack = new Array(tabsCount);
         
-        abstractFacility.displayIndex = Math.max(0, Math.floor(targetSlotBlank.displayIndex || 0));
-        abstractFacility.activeStackIdx = Math.max(0, Math.floor(targetSlotBlank.activeStackIdx || 0));
-        abstractFacility.componentType = String(targetSlotBlank.componentType || "slot");
-    }
-
-    // 4. ЖЕСТКАЯ РЕГИСТРАЦИЯ ПРИБОРА НА ТАКТОВОЙ ШИНЕ СМО ЯДРА
-    const activeRegistryFacility = _gpssEngineState.facilitiesRegistry.get(slotId);
-    if (activeRegistryFacility) {
-        activeRegistryFacility.viewStack = abstractFacility.viewStack;
-        activeRegistryFacility.specificAdvanceWorker = specificWorkerFn;
-        activeRegistryFacility.advanceFacility = abstractFacility.advanceFacility;
-        activeRegistryFacility.componentType = String(cleanDomain);
-    } else {
-        if (typeof registerGpssFacility === "function") {
-            registerGpssFacility(slotId, abstractFacility);
+        for (let idx = 0; idx < tabsCount; idx++) {
+            const tabConfig = payload.tabs[idx];
+            const tabPath = String(tabConfig?.path || "C:/");
+            
+            const tabViewInstance = createViewFn(slotId);
+            const tabMdlInstance = allocateDomainMdl(comp, tabPath);
+            
+            dynamicTabsStack[idx] = { 
+                mdl: tabMdlInstance, 
+                view: tabViewInstance,
+                tabTitle: String(tabConfig?.title || "TAB")
+            };
+            Object.preventExtensions(dynamicTabsStack[idx]);
         }
+        abstractFacility.viewStack = dynamicTabsStack;
+    } else {
+        // ДЛЯ ВСЕХ ОСТАЛЬНЫХ (Dashboard, CLI, Theme, Logger) — честный плоский struct-конверт
+        const singleViewInstance = createViewFn(slotId);
+        
+        abstractFacility.viewStack = { 
+            mdl: allocateDomainMdl(comp, "C:/"), 
+            view: singleViewInstance 
+        };
+        Object.preventExtensions(abstractFacility.viewStack);
     }
 
+    // Накатываем физическую геометрию из IPC-пакета
+    if (Array.isArray(abstractFacility.viewStack)) {
+        for (let t = 0; t < abstractFacility.viewStack.length; t++) {
+            const vObj = abstractFacility.viewStack[t].view;
+            if (vObj) { 
+                vObj.width = Math.floor(payload.nodeWidth); 
+                vObj.height = Math.floor(payload.nodeHeight); 
+            }
+        }
+    } else if (abstractFacility.viewStack.view) {
+        abstractFacility.viewStack.view.width = Math.floor(payload.nodeWidth);
+        abstractFacility.viewStack.view.height = Math.floor(payload.nodeHeight);
+    }
+
+    // Легитимная DOD подмена открытых полей запечатанного бланка
+    if (targetSlotBlank) {
+        targetSlotBlank.viewStack = abstractFacility.viewStack;
+        targetSlotBlank.advanceFacility = abstractFacility.advanceFacility;
+        targetSlotBlank.activeStackIdx = abstractFacility.activeStackIdx;
+    }
+
+    // Монтируем прибор на шину СМО
+    registerGpssFacility(slotId, abstractFacility);
     return true;
 }
 
 /** 
  * ПАСПОРТ ЛИСТИНГА:
  * Путь: src/core/slot_maker.js
- * Время модификации: 20.08.2026 23:35:10 MSK
- * Номер для отката: #0820-STABLE-SYSTEM-MOUSE-CLASSIFIER
+ * Время модификации: 21.08.2026 20:22:15 MSK
  */
+    

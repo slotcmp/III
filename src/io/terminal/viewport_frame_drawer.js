@@ -1,8 +1,8 @@
 /**
  * @file src/io/terminal/viewport_frame_drawer.js
- * @version 3.0.0-RELEASE-DOD-FORK
+ * @version 3.5.0-RELEASE-SMO-VIEWPORT-FRAME-DRAWER-STRICT-GOLD
  * @description Процедурный выжигатель стальных рамок вокруг TUI-компонентов (Presentation-контур).
- * Накатывает символы двойного Unicode-контура поверх ячеек UHD-буфера.
+ * ИСПРАВЛЕН ФОКУС: Золотой контур горит безусловно при флаге активности окна без участия масок JSON.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
@@ -20,6 +20,7 @@ import { drawFrameGeoPassport } from "./frame_geo_renderer.js";
  * @param {boolean} isFocusedBool Флаг активности/фокуса панели в интерфейсе
  */
 export function drawDisplayNodeFrame(node, compTypeStr, slotIdStr, isFocusedBool) {
+    if (!node) return;
     const m = node.matrix;
     if (!m) return;
 
@@ -32,11 +33,8 @@ export function drawDisplayNodeFrame(node, compTypeStr, slotIdStr, isFocusedBool
     const displayIndex = facility ? Math.floor(facility.displayIndex || 0) : 0;
     const rawViewStack = facility ? facility.viewStack : null;
 
-    const hostAppSettings = _gpssEngineState.runtime?.model?.logicalState?.appSettings;
-    const activeThemeAlias = String(hostAppSettings?.currentBorderAnsiMask || "gray");
-
-    // ЗОЛОТИСТЫЙ ФОКУС: Активное окно горит золотом, неактивные - цветом веб-темы
-    const themeColorAnsi = isFocusedBool ? resolveWebColor("gold") : resolveWebColor(activeThemeAlias);
+    // ПРЕЦИЗИОННОЕ ИСПРАВЛЕНИЕ: Золотой фокус имеет абсолютный приоритет над конфигом
+    const themeColorAnsi = isFocusedBool ? "\x1b[38;5;220m" : "\x1b[38;5;242m"; // Золото для активного, сталь для пассивного
     const bgColor = "\x1b[40m";
 
     // 1. Двойные горизонтальные ребра (═) строго по индексам строк Y=0 и Y=h-1
@@ -83,9 +81,7 @@ export function drawDisplayNodeFrame(node, compTypeStr, slotIdStr, isFocusedBool
         if (botRow[w - 1]) { botRow[w - 1].char = "╝"; botRow[w - 1].fg = themeColorAnsi; botRow[w - 1].bg = bgColor; }
     }
 
-    // ==========================================================================
-    // СТРОГОЕ ВПЕКАНИЕ СЛОЕВ ПАСПОРТА РАМЫ ПО СКРИНШОТУ-ОРИГИНАЛУ
-    // ==========================================================================
+    // ВПЕКАНИЕ ПАСПОРТА РАМЫ
     if (topRow) {
         drawFrameTitle(topRow, compTypeStr, slotIdStr, w, isFocusedBool);
         drawFrameQueueIndicator(topRow, slotIdStr, displayIndex, rawViewStack, w, facility);
@@ -98,5 +94,5 @@ export function drawDisplayNodeFrame(node, compTypeStr, slotIdStr, isFocusedBool
 /** 
  * ПАСПОРТ ЛИСТИНГА:
  * Путь: src/io/terminal/viewport_frame_drawer.js
- * Время модификации: 18.08.2026 17:58:35 MSK
+ * Время модификации: 21.08.2026 16:55:00 MSK
  */

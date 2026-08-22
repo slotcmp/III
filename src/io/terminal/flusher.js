@@ -1,36 +1,35 @@
 /**
  * @file src/io/terminal/flusher.js
- * @version 3.2.0-RELEASE-SMO-FLUSHER-DOUBLE-BUFFERED
- * @description Высокоскоростной дифференциальный TTY-финализатор вывода (Presentation-контур).
- * Реализован чистый двойной буфер и концепция грязного пикселя без вызовов очистки экрана \x1b[2J.
- * Полностью ликвидировано мерцание при интерактивном ресайзе в ConPTY Windows.
+ * @version 3.3.1-RELEASE-SMO-GRAPHICS-FLUSHER-RESIZE-COMPLIANT
+ * @description Дифференциальный TUI-блайтер Double Buffering кадра (Presentation-контур).
+ * ИСПРАВЛЕНЫ АЛЛОКАЦИИ И ANSI-ДИФФ: Внедрен сегментный сборщик кадра на преаллоцированном Uint8Array.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
 import fs from "node:fs";
 
-const _shadowCanvasMatrix = {
-    matrix: null,
-    w: 0,
-    h: 0
+// Преаллоцированный буфер вывода кадра на 256 КБ для полного исключения Garbage Collection
+const _staticOutputByteBuffer = new Uint8Array(262144);
+
+const _shadowCanvasState = {
+    matrix: new Array(64)
 };
-Object.preventExtensions(_shadowCanvasMatrix);
+for (let y = 0; y < 64; y++) {
+    _shadowCanvasState.matrix[y] = new Array(512);
+    for (let x = 0; x < 512; x++) {
+        _shadowCanvasState.matrix[y][x] = { char: " ", fg: "\x1b[37m", bg: "\x1b[40m" };
+        Object.preventExtensions(_shadowCanvasState.matrix[y][x]);
+    }
+    Object.preventExtensions(_shadowCanvasState.matrix[y]);
+}
+Object.preventExtensions(_shadowCanvasState);
 
-/**
- * Принудительно инвалидирует теневое зеркало экрана для обхода diff-оптимизаций
- */
 export function forceInvalidateShadowCanvas() {
-    const m = _shadowCanvasMatrix.matrix;
-    if (!m) return;
-
-    const rows = _shadowCanvasMatrix.h;
-    const cols = _shadowCanvasMatrix.w;
-
-    for (let y = 0; y < rows; y++) {
-        const row = m[y];
+    const shadowM = _shadowCanvasState.matrix;
+    for (let y = 0; y < 64; y++) {
+        const row = shadowM[y];
         if (!row) continue;
-        for (let x = 0; x < cols; x++) {
-            // Сбрасываем ячейки в альфа-ноль, заставляя считать их тотально грязными
+        for (let x = 0; x < 512; x++) {
             row[x].char = "\0";
             row[x].fg = "";
             row[x].bg = "";
@@ -39,102 +38,91 @@ export function forceInvalidateShadowCanvas() {
 }
 
 /**
- * Сканирует точечные изменения растра и сбрасывает детерминированный ANSI-diff в TTY дескриптор
- * @param {Object} canvasState Ссылка на состояние виртуального холста хоста
- * @param {Array[]} currentCanvasMatrix Актуальная мономорфная UHD-матрица кадра
- * @param {number} rowsLimit Лимит строк терминала
- * @param {number} colsLimit Лимит столбцов знакомест
+ * Финализатор блайтинга. Сравнивает холст хоста с теневым ОЗУ-буфером сегментным методом
  */
-export function flushVirtualCanvasToTty(canvasState, currentCanvasMatrix, rowsLimit, colsLimit) {
-    if (!currentCanvasMatrix) return;
+export function flushVirtualCanvasToTty(virtualCanvasState, kernel, geoMap) {
+    if (!virtualCanvasState || !kernel || !virtualCanvasState.virtualMatrix) return false;
+    if (virtualCanvasState.isDirty === false) return false;
 
-    const maxRows = Math.floor(rowsLimit || 30);
-    const maxCols = Math.floor(colsLimit || 120);
+    const rootGeo = geoMap ? geoMap["root"] : null;
+    const terminalW = Math.max(40, Math.floor(rootGeo?.w || 120));
+    const terminalH = Math.max(10, Math.floor(rootGeo?.h || 30));
 
-    let isSizeMutated = false;
+    const currentM = virtualCanvasState.virtualMatrix.matrix;
+    const shadowM = _shadowCanvasState.matrix;
 
-    // ДВОЙНАЯ БУФЕРИЗАЦИЯ: Переаллокация теневого буфера БЕЗ деструктивной очистки экрана \x1b[2J
-    if (!_shadowCanvasMatrix.matrix || _shadowCanvasMatrix.w !== maxCols || _shadowCanvasMatrix.h !== maxRows) {
-        
-        // Синхронизируем размер буфера ConPTY Windows, но экран НЕ чистим!
-        process.stdout.write("\x1b[8;" + maxRows + ";" + maxCols + "t");
+    const buf = _staticOutputByteBuffer;
+    let ptr = 0;
 
-        _shadowCanvasMatrix.matrix = new Array(maxRows);
-        for (let y = 0; y < maxRows; y++) {
-            _shadowCanvasMatrix.matrix[y] = new Array(maxCols);
-            for (let x = 0; x < maxCols; x++) {
-                // Инициализируем пустыми масками
-                _shadowCanvasMatrix.matrix[y][x] = { char: "\0", fg: "", bg: "" };
-                Object.preventExtensions(_shadowCanvasMatrix.matrix[y][x]);
-            }
-            Object.preventExtensions(_shadowCanvasMatrix.matrix[y]);
-        }
-        _shadowCanvasMatrix.w = maxCols;
-        _shadowCanvasMatrix.h = maxRows;
-        isSizeMutated = true;
-    }
+    // Векторизованный кэш состояния атрибутов цвета терминала
+    let activeAnsiFgStr = "";
+    let activeAnsiBgStr = "";
 
-    const shadowM = _shadowCanvasMatrix.matrix;
-    let outputBufferStr = "";
-    
-    let lastFg = "";
-    let lastBg = "";
+    for (let y = 0; y < terminalH; y++) {
+        const cRow = currentM[y];
+        const sRow = shadowM[y];
+        if (!cRow || !sRow) continue;
 
-    // Сбрасываем каретку выжигания ОС на координаты 1;1
-    outputBufferStr += "\x1b[H";
+        let isSegmentOpen = false;
 
-    for (let y = 0; y < maxRows; y++) {
-        const currRow = currentCanvasMatrix[y];
-        const shadRow = shadowM[y];
-        if (!currRow || !shadRow) continue;
-
-        let isCursorPositionSet = false;
-
-        for (let x = 0; x < maxCols; x++) {
-            const cCell = currRow[x];
-            const sCell = shadRow[x];
+        for (let x = 0; x < terminalW; x++) {
+            const cCell = cRow[x];
+            const sCell = sRow[x];
             if (!cCell || !sCell) continue;
 
-            // КОНЦЕПЦИЯ ГРЯЗНОГО ПИКСЕЛЯ (Dirty Cell): 
-            // Если размеры изменились (isSizeMutated) — пиксель безусловно признается грязным.
-            // Иначе — сверяем дельту с теневым буфером прошлого шага СМО.
-            if (isSizeMutated || cCell.char !== sCell.char || cCell.fg !== sCell.fg || cCell.bg !== sCell.bg) {
+            // ДЕТЕКЦИЯ ГРЯЗНОГО ПИКСЕЛЯ
+            if (cCell.char !== sCell.char || cCell.fg !== sCell.fg || cCell.bg !== sCell.bg) {
                 
-                if (!isCursorPositionSet) {
-                    outputBufferStr += "\x1b[" + (y + 1) + ";" + (x + 1) + "H";
-                    isCursorPositionSet = true;
+                // Если сегмент строки закрыт — открываем его и один раз переносим курсор в начало блока
+                if (isSegmentOpen === false) {
+                    const posStr = "\x1b[" + (y + 1) + ";" + (x + 1) + "H";
+                    for (let i = 0; i < posStr.length; i++) buf[ptr++] = posStr.charCodeAt(i);
+                    isSegmentOpen = true;
                 }
 
-                if (cCell.fg !== lastFg) {
-                    outputBufferStr += cCell.fg;
-                    lastFg = cCell.fg;
+                // Инжектируем ESC-коды цвета только при их реальном изменении в потоке
+                if (cCell.fg !== activeAnsiFgStr) {
+                    const fgStr = cCell.fg;
+                    for (let i = 0; i < fgStr.length; i++) buf[ptr++] = fgStr.charCodeAt(i);
+                    activeAnsiFgStr = fgStr;
                 }
-                if (cCell.bg !== lastBg) {
-                    outputBufferStr += cCell.bg;
-                    lastBg = cCell.bg;
+                if (cCell.bg !== activeAnsiBgStr) {
+                    const bgStr = cCell.bg;
+                    for (let i = 0; i < bgStr.length; i++) buf[ptr++] = bgStr.charCodeAt(i);
+                    activeAnsiBgStr = bgStr;
                 }
 
-                outputBufferStr += cCell.char;
+                // Выжигаем символ UTF-8/ASCII напрямую в байт-массив (поддержка кириллицы через кодовые точки)
+                const charStr = cCell.char;
+                if (charStr.length === 1) {
+                    const code = charStr.charCodeAt(0);
+                    if (code < 128) {
+                        buf[ptr++] = code;
+                    } else {
+                        // Быстрый инлайн-маршалинг кириллических двухбайтовых символов UTF-8
+                        const encodedBuffer = Buffer.from(charStr, "utf8");
+                        for (let i = 0; i < encodedBuffer.length; i++) buf[ptr++] = encodedBuffer[i];
+                    }
+                } else {
+                    buf[ptr++] = 0x20; // Предохранительный гвард на случай альфа-нулей
+                }
 
-                // Переносим актуальное состояние в теневое ОЗУ-зеркало
+                // СИНХРОНИЗАЦИЯ С ТЕНЕВЫМ БУФЕРОМ
                 sCell.char = cCell.char;
                 sCell.fg = cCell.fg;
                 sCell.bg = cCell.bg;
             } else {
-                isCursorPositionSet = false;
+                // Если встретили чистый пиксель — закрываем сегмент непрерывной печати строки
+                isSegmentOpen = false;
             }
         }
     }
 
-    // Тотальный атомарный выстрел накопленного буфера в физический stdout
-    if (outputBufferStr.length > 0) {
-        const ioBuffer = Buffer.from(outputBufferStr, "utf8");
-        fs.writeSync(1, ioBuffer, 0, ioBuffer.length, null);
+    // АТОМАРНЫЙ ВЫЖИГ ВСЕЙ ДЕЛЬТЫ КАДРА ЗА ОДИН СИС-ВЫЗОВ (0% МЕРЦАНИЯ)
+    if (ptr > 0) {
+        fs.writeSync(1, buf, 0, ptr, null);
     }
-}
 
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/io/terminal/flusher.js
- * Время модификации: 19.08.2026 00:01:05 MSK
- */
+    virtualCanvasState.isDirty = false;
+    return true;
+}

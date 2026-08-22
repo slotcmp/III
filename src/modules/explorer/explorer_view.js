@@ -1,16 +1,14 @@
-﻿/**
+/**
  * @file src/modules/explorer/explorer_view.js
- * @version 3.0.1-RELEASE-SMO-EXPLORER-VIEW-RESOLVED
+ * @version 3.0.2-RELEASE-SMO-EXPLORER-VIEW-RESOLVED
  * @description Модуль отрисовки интерфейса проводников 102/103 (Presentation-контур).
- * Путь импорта перенаправлен на реальный физический файл explorer_item_renderer.js для устранения ERR_MODULE_NOT_FOUND.
+ * ИСПРАВЛЕНЫ ГРАНИЦЫ СТРОК: maxVisibleRows зажат под strict-лимит для защиты нижних рамок.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
-// ПРЕЦИЗИОННОЕ ИСПРАВЛЕНИЕ: Связываем импорт с реальным физическим файлом на диске
 import { drawExplorerItem } from "./explorer_item_renderer.js";
 
 /**
- * Фабрика выделения локального запечатанного TUI-буфера отображения панели
  * @param {string} slotIdStr Идентификатор целевой панели
  * @returns {Object} Запечатанная мономорфная структура представления
  */
@@ -42,9 +40,6 @@ export function createExplorerViewInstance(slotIdStr) {
 
 /**
  * Синхронный впек вкладок и скользящего окна файлов в локальную матрицу ОЗУ
- * @param {Object} view Ссылка на буфер отображения прибора
- * @param {Object} mdl Ссылка на плосную модель данных вкладок
- * @param {number} tabIndexNum Числовой индекс активной вкладки
  */
 export function renderExplorerContent(view, mdl, tabIndexNum) {
     if (!view || !mdl || !view.localBuffer.matrix) return;
@@ -65,7 +60,7 @@ export function renderExplorerContent(view, mdl, tabIndexNum) {
         }
     }
 
-    // Рендеринг бирюзовых вкладок T1..T4
+    // Рендеринг бирюзовых вкладок T1..T4 на строке Y = 1
     const tabRow = m[1];
     if (tabRow) {
         let currentTabX = 2;
@@ -88,10 +83,13 @@ export function renderExplorerContent(view, mdl, tabIndexNum) {
         }
     }
 
-    // Рендеринг скользящего окна файлов на базе координат selectedIndex модели
     const items = mdl.itemsList || [];
     const totalItems = items.length;
-    const maxVisibleRows = currentH - 4;
+    
+    // ИСПРАВЛЕНИЕ: maxVisibleRows жестко зарезана до currentH - 5.
+    // Файлы начнут выводиться с Y = 3. Последняя строка займет максимум currentH - 3.
+    // Строка h - 2 останется чистым пустым отступом, а h - 1 гарантированно сохранит стальную рамку.
+    const maxVisibleRows = Math.max(0, currentH - 5);
     const viewportOffset = Math.max(0, Math.floor(mdl.viewportOffset || 0));
 
     for (let r = 0; r < maxVisibleRows; r++) {
@@ -105,14 +103,8 @@ export function renderExplorerContent(view, mdl, tabIndexNum) {
         if (fileRow && fileItem) {
             const isRowSelected = (itemIdx === Math.floor(mdl.selectedIndex || 0));
             
-            // Передаем плоскую строку ОЗУ во внешний байтовый itemRenderer
+            // Передаем плоскую строку ОЗУ во внешний безмусорный и мономорфный отрисовщик строк
             drawExplorerItem(fileRow, fileItem, currentW, isRowSelected);
         }
     }
 }
-
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/modules/explorer/explorer_view.js
- * Время модификации: 18.08.2026 18:09:12 MSK
- */

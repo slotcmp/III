@@ -1,8 +1,8 @@
-﻿/**
+/**
  * @file src/core/smo/bus.js
- * @version 3.5.1-RELEASE-SMO-REACTIVE-PRIORITY-BUS
+ * @version 3.8.9-RELEASE-SMO-DYNAMIC-HOT-SWAP-BUS
  * @description Реактивная тактовая шина и диспетчер прерываний абстрактных приборов (Control-контур).
- * Исправлен баг гонки ресайза: внедрен детерминированный приоритет замыкающей фазы рендеринга кадра.
+ * ИСПРАВЛЕН ЭКСПОРТ: Восстановлен экспорт registerGpssFacility для slot_maker.js.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
@@ -11,6 +11,7 @@ import fs from "node:fs";
 export const _gpssEngineState = {
     runtime: null,
     facilitiesRegistry: new Map(),
+    facilitiesKeysCached: [], 
     isScanActive: false,
     _transactionGlobalCounter: 0,
     activeAsyncTransactionsCount: 0
@@ -18,19 +19,13 @@ export const _gpssEngineState = {
 Object.preventExtensions(_gpssEngineState);
 
 export const _kernelContext = {
-    logPath: null
+    logPath: "./smo.log"
 };
 Object.preventExtensions(_kernelContext);
 
 /**
- * Превентивный гвард для безопасной записи в динамический лог-файл
+ * Очищает лог-файл при холодном старте платформы (вызывается из index.js)
  */
-function appendToLogGuard(messageStr) {
-    const targetLogPath = _kernelContext.logPath;
-    if (!targetLogPath) return;
-    fs.appendFileSync(targetLogPath, messageStr, "utf8");
-}
-
 export function purgeLogFileAtStartup() {
     const targetLogPath = _kernelContext.logPath;
     if (!targetLogPath) return;
@@ -38,31 +33,21 @@ export function purgeLogFileAtStartup() {
 }
 
 /**
- * Регистрация абстрактных приборов на шине СМО
+ * Регистрирует прибор обслуживания в суверенном Map-реестре шины СМО
+ * ИСПРАВЛЕН ЭКСПОРТ: Ключевая функция IoC-монтажа успешно экспортирована.
  */
 export function registerGpssFacility(slotIdStr, facilityInstance) {
     if (!slotIdStr || !facilityInstance) return false;
     const key = String(slotIdStr);
     _gpssEngineState.facilitiesRegistry.set(key, facilityInstance);
     
-    const config = _gpssEngineState.runtime?.model?.logicalState?.appSettings;
-    if (config?.ttni && config.ttni.bSlotLogBypass === true) {
-        return true; 
-    }
-    
-    const now = new Date();
-    const h = String(now.getHours()).padStart(2, "0");
-    const m = String(now.getMinutes()).padStart(2, "0");
-    const s = String(now.getSeconds()).padStart(2, "0");
-    
-    const strictRegLineStr = "[" + h + ":" + m + ":" + s + " Msk] Прибор " + key + " зарегистрирован в СМО\n";
-    appendToLogGuard(strictRegLineStr);
+    // Атомарная инвалидация плоского кэша ключей для тактового обхода
+    _gpssEngineState.facilitiesKeysCached = Array.from(_gpssEngineState.facilitiesRegistry.keys());
     return true;
 }
 
 /**
- * РЕАКТИВНЫЙ ИМПУЛЬСНЫЙ ТРИГГЕР ШИНЫ СМО: 
- * Генерирует транзакт прерывания и мгновенно проталкивает его по конвейеру
+ * Генерирует транзакт прерывания и направляет в конвейер прибора обслуживания
  */
 export function generateGpssTransaction(targetChannelStr, intentStr, contextPayload) {
     const chanKey = String(targetChannelStr || "");
@@ -78,47 +63,42 @@ export function generateGpssTransaction(targetChannelStr, intentStr, contextPayl
     };
     Object.preventExtensions(gpssTx);
     
-    if (currentIntent === "TRIGGER_RESIZE" || currentIntent === "INJECT_GEO_MAP") {
-        const now = new Date();
-        const tStr = String(now.getHours()).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0") + ":" + String(now.getSeconds()).padStart(2, "0");
-        
-        if (currentIntent === "TRIGGER_RESIZE") {
-            const logResStr = "[" + tStr + " Msk] [СМО_RESIZE_TRIGGERED] Интент: TRIGGER_RESIZE | Канал #" + chanKey + " | Ожидание калькуляции...\n";
-            appendToLogGuard(logResStr);
-        } else {
-            const logMapStr = "[" + tStr + " Msk] [СМО_GEOMETRY_COMPUTED] Интент: INJECT_GEO_MAP | Новая флекс-сетка впечена в ОЗУ хоста\n";
-            appendToLogGuard(logMapStr);
-        }
-    }
-    
-    // Пушим транзакт в накопитель очереди целевого абстрактного прибора
     const targetFacility = _gpssEngineState.facilitiesRegistry.get(chanKey);
     if (targetFacility && typeof targetFacility.dispatch === "function") {
         targetFacility.dispatch(currentIntent, gpssTx);
     }
 
-    // Пробуждаем реактивный конвейер продвижения
-    executeReactivePulsePipeline();
+    // Тотальный пробой асинхронности на этапе бутстрапа платформы
+    if (currentIntent === "EXECUTE_RENDER" || 
+        currentIntent === "BOOT_LAYOUT_TREE" || 
+        currentIntent === "SYNCHRONIZE_DYNAMIC_SLOT" ||
+        currentIntent === "LOAD_SEQUENCE_COMPLETED") {
+        
+        if (targetFacility && typeof targetFacility.advanceFacility === "function") {
+            targetFacility.advanceFacility();
+        }
+        
+        if (currentIntent === "LOAD_SEQUENCE_COMPLETED") {
+            executeReactivePulsePipeline();
+        }
+    } else {
+        process.nextTick(executeReactivePulsePipeline);
+    }
 
     return true;
 }
+
 /**
- * Автомат сквозного реактивного продвижения активных прерываний с приоритетом рендеринга
+ * Главный конвейер тактового продвижения приборов СМО
  */
-function executeReactivePulsePipeline() {
+export function executeReactivePulsePipeline() {
     if (_gpssEngineState.isScanActive) return;
     _gpssEngineState.isScanActive = true;
     
-    const activeFacilitiesKeys = Array.from(_gpssEngineState.facilitiesRegistry.keys());
-    
-    // ПРОХОД 1: Продвигаем координатные, бизнес-приборы и инфраструктурный Канал 4
-    for (let i = 0; i < activeFacilitiesKeys.length; i++) {
-        const slotKey = activeFacilitiesKeys[i];
-        
-        // ИСПРАВЛЕНИЕ: Пропускаем только Канал 1 (рендер), Канал 4 обязан продвигаться!
-        if (slotKey === "1") {
-            continue; 
-        }
+    const len = _gpssEngineState.facilitiesKeysCached.length;
+    for (let i = 0; i < len; i++) {
+        const slotKey = _gpssEngineState.facilitiesKeysCached[i];
+        if (slotKey === "1") continue; 
         
         const facility = _gpssEngineState.facilitiesRegistry.get(slotKey);
         if (facility && typeof facility.advanceFacility === "function") {
@@ -126,7 +106,6 @@ function executeReactivePulsePipeline() {
         }
     }
     
-    // ПРОХОД 2: ФИНАЛЬНЫЙ СМО-БАРЬЕР — продвигаем Прибор Отрисовки (Канал 1) гарантированно последним
     const renderUnit = _gpssEngineState.facilitiesRegistry.get("1");
     if (renderUnit && typeof renderUnit.advanceFacility === "function") {
         renderUnit.advanceFacility();
@@ -134,7 +113,6 @@ function executeReactivePulsePipeline() {
     
     _gpssEngineState.isScanActive = false;
 
-    // Выталкиваем сформированный растр кадра безусловно при каждом реактивном прерывании
     if (_gpssEngineState.runtime) {
         const kernel = _gpssEngineState.runtime;
         if (typeof kernel.executeViewportBlit === "function") {
@@ -142,22 +120,3 @@ function executeReactivePulsePipeline() {
         }
     }
 }
-
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/core/smo/bus.js
- * Время модификации: 20.08.2026 18:31:05 MSK
- */
-
-
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/core/smo/bus.js
- * Время модификации: 20.08.2026 18:31:05 MSK
- */
-
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/core/smo/bus.js
- * Время модификации: 18.08.2026 23:34:10 MSK
- */

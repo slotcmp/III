@@ -1,45 +1,30 @@
-﻿/**
+/**
  * @file src/core/smo/worker_gateway.js
- * @version 3.2.7-RELEASE-SMO-WORKER-GATEWAY-STRICT
+ * @version 3.6.1-RELEASE-SMO-WORKER-GATEWAY-STRICT-DOD
  * @description Аппаратный межпоточный шлюз IPC-сообщений (Control-контур).
+ * ИСПРАВЛЕНА ИНИЦИАЛИЗАЦИЯ: Потоки создаются сразу при вызове фабрики, удален preventExtensions с системных объектов.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
 import { Worker } from "node:worker_threads";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { generateGpssTransaction } from "./bus.js";
+import { generateGpssTransaction, _gpssEngineState } from "./bus.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export function createWorkerGateway(hostRef) {
+    // Предварительно рассчитываем абсолютные пути к изолятам
+    const layoutWorkerPath = path.resolve(__dirname, "../../workers/layout_worker.js");
+    const vfsWorkerPath = path.resolve(__dirname, "../../workers/vfs_worker.js");
+    const kbdWorkerPath = path.resolve(__dirname, "../../workers/keyboard_worker.js");
+
     const gatewayState = {
         host: hostRef,
-        layoutWorker: null,
-        vfsWorker: null,
-
-        initWorkers: () => {
-            const layoutWorkerPath = path.resolve(__dirname, "../../workers/layout_worker.js");
-            const vfsWorkerPath = path.resolve(__dirname, "../../workers/vfs_worker.js");
-
-            gatewayState.layoutWorker = new Worker(layoutWorkerPath, { type: "module" });
-            gatewayState.vfsWorker = new Worker(vfsWorkerPath, { type: "module" });
-
-            gatewayState.layoutWorker.on("message", (msg) => {
-                if (msg && msg.type === "GEO_MAP_COMPUTED") {
-                    generateGpssTransaction("9", "INJECT_GEO_MAP", msg.geoMap);
-                }
-            });
-
-            gatewayState.vfsWorker.on("message", (response) => {
-                if (response && response.P2 === "INJECT_VFS_DATA") {
-                    generateGpssTransaction(response.P1, "INJECT_VFS_DATA", response.P3);
-                }
-            });
-
-            Object.preventExtensions(gatewayState.layoutWorker);
-            Object.preventExtensions(gatewayState.vfsWorker);
-        },
+        // ИСПРАВЛЕНИЕ: Инициализируем системные воркеры немедленно при сборке шлюза
+        layoutWorker: new Worker(layoutWorkerPath, { type: "module" }),
+        vfsWorker: new Worker(vfsWorkerPath, { type: "module" }),
+        keyboardWorker: new Worker(kbdWorkerPath, { type: "module" }),
 
         triggerGeometryCalculation: (layoutTree, widthNum, heightNum, appSettingsObj, txIdNum) => {
             if (!gatewayState.layoutWorker) return;
@@ -66,15 +51,60 @@ export function createWorkerGateway(hostRef) {
                 }
             };
             gatewayState.vfsWorker.postMessage(taskPack);
+        },
+
+        triggerKeyboardBufferParsing: (focusedSlotIdStr, rawKeyBuffer) => {
+            if (!gatewayState.keyboardWorker) return;
+
+            const taskPack = {
+                P1: String(focusedSlotIdStr),
+                P2: "PROCESS_KEYPRESS",
+                P3: {
+                    name: rawKeyBuffer.name,
+                    sequence: rawKeyBuffer.sequence
+                }
+            };
+            Object.preventExtensions(taskPack.P3);
+            Object.preventExtensions(taskPack);
+            gatewayState.keyboardWorker.postMessage(taskPack);
         }
     };
 
+    // Навешиваем слушатели событий до запечатывания стейта самого шлюза
+    
+    // 1. Приемник флекс-геометрии окон от layout_worker.js
+    gatewayState.layoutWorker.on("message", (msg) => {
+        if (msg && msg.type === "GEO_MAP_COMPUTED") {
+            generateGpssTransaction("9", "INJECT_GEO_MAP", msg.geoMap);
+        }
+    });
+
+    // 2. Приемник данных дискового пространства от vfs_worker.js
+    gatewayState.vfsWorker.on("message", (response) => {
+        if (response && response.P2 === "INJECT_VFS_DATA") {
+            generateGpssTransaction(response.P1, "INJECT_VFS_DATA", response.P3);
+        }
+    });
+
+    // 3. Синхронизатор клавиатурного потока IPC
+    gatewayState.keyboardWorker.on("message", (msg) => {
+        if (!msg) return;
+        
+        if (msg.action === "LOG_ENTRY_PENDING") {
+            generateGpssTransaction("108", "ADD_LOG_ENTRY", msg.payload);
+        } 
+        else if (msg.action === "KEYBOARD_ACTION_READY" && msg.payload) {
+            generateGpssTransaction("4", "EXECUTE_RESOLVED_KEY", msg.payload);
+        }
+        else if (msg.action === "KEYBOARD_FACILITY_RELEASE_READY" || msg.action === "RELEASE_KEYBOARD_FACILITY") {
+            const kbdUnit = _gpssEngineState.facilitiesRegistry.get("4");
+            if (kbdUnit) {
+                kbdUnit.isProcessing = false;
+            }
+        }
+    });
+
+    // Запечатываем ТОЛЬКО объект стейта шлюза, системные Worker Thread инстансы не трогаем!
     Object.preventExtensions(gatewayState);
     return gatewayState;
 }
-
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/core/smo/worker_gateway.js
- * Время модификации: 18.08.2026 23:44:15 MSK
- */

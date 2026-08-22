@@ -1,65 +1,66 @@
 /**
  * @file src/modules/dashboard/dashboard_ctl.js
- * @version 3.0.1-RELEASE-SMO-DASHBOARD-ctl
+ * @version 3.3.1-RELEASE-SMO-DASHBOARD-CTL-STERILE
  * @description Контроллер и фазовый фильтр СМО-прибора обслуживания Канала 101 (Dashboard).
- * Переключает под-вкладки мониторинга ресурсов ядра без разрыва такта Event Loop.
- * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
+ * ИСПРАВЛЕНА АДРЕСАЦИЯ: Имена полей синхронизированы со статической DOD-фабрикой slot_maker.js.
+ * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp / 0% try-catch.
  */
 
-import { createDashboardMdlInstance } from "./dashboard_mdl.js";
-import { createDashboardViewInstance, renderDashboardContent } from "./dashboard_view.js";
-
 /**
- * Фабрика сборки мономорфного состояния PAC-контроллера дашборда
- * @param {Object} appHostRef Ссылка на ядро хоста приложения
- * @param {string} slotIdStr Идентификатор целевого слота
- * @returns {Object} Запечатанная структура контроллера
+ * Старая фабрика сборки контроллера сохранена для совместимости автоскана V8, 
+ * но рантайм GEN III использует ленивый монтаж через IoC-монтажник slot_maker.js.
  */
 export function createDashboardController(appHostRef, slotIdStr) {
     const id = String(slotIdStr || "101");
-    const ctlState = { mdl: createDashboardMdlInstance(), view: createDashboardViewInstance(id), host: appHostRef, slotId: id };
+    const ctlState = { mdl: null, view: null, host: appHostRef, slotId: id };
     Object.preventExtensions(ctlState);
     return ctlState;
 }
 
 /**
- * Фазовый СМО-фильтр супершины прерываний для Прибора Канала 101
- * @param {Object} facilityState Состояние активного прибора СМО
- * @param {string} intentStr Идентификатор прерывания
- * @param {Object} contextPayload Контекст транзакта
- * @param {Object} currentTx Полный паспорт транзакта СМО
- * @returns {boolean} Флаг наличия мутаций
+ * Чистая процедура редукции прерываний Слота 101
  */
 export function processSpecificDashboardLogic(facilityState, intentStr, contextPayload, currentTx) {
     const pack = facilityState.viewStack;
     if (!pack || !pack.mdl || !pack.view) return false;
     
-    const mdl = pack.mdl;
-    const view = pack.view;
+    const m = pack.mdl; 
+    const v = pack.view;
     const intent = String(intentStr || "");
     let isMutated = false;
 
-    // СМО-ФАЗА ОТРЕСОВКИ: Полностью СИНХРОННЫЙ вызов отрисовщика из статического импорта
-    if (intent === "SMO_PHASE_CONTENT") {
-        renderDashboardContent(view, mdl);
-        return true;
-    }
-
     switch (intent) {
-        case "ROTATE_SLOT_STACK":
-        case "ROTATE_DASHBOARD_SUBVIEW":
-            // Переключаем под-вкладку Дашборда (Линейка <-> Монитор) строго по прерыванию СМО
-            view._subViewTypeStr = (view._subViewTypeStr === "monitor") ? "ruler" : "monitor";
-            facilityState.activeStackIdx = (view._subViewTypeStr === "monitor") ? 1 : 0;
-            mdl._isDirty = true; 
+        case "UPDATE_METRICS":
+            if (contextPayload) {
+                // ИСПРАВЛЕНИЕ: Запись ведется строго в запечатанные регистры ОЗУ из slot_maker.js
+                m._cpuPercent = Math.max(0, Math.min(100, Math.floor(Number(contextPayload.cpu) || 0)));
+                
+                // Рассчитываем потребление памяти относительно зафиксированного лимита
+                const usedMb = Math.max(0, Math.floor(Number(contextPayload.ramMb) || 1024));
+                m._ramUsedMb = usedMb;
+                
+                const totalMb = Math.max(1, Math.floor(m._ramTotalMb || 16384));
+                m._ramPercent = Math.max(0, Math.min(100, Math.floor((usedMb * 100) / totalMb)));
+                
+                m.totalTransactions = Math.max(0, Math.floor(Number(contextPayload.txCount || 0)));
+                
+                m._isDirty = true;
+                isMutated = true;
+            }
+            break;
+
+        case "TOGGLE_SUBVIEW":
+            // Легитимная DOD-мутация локального флага отрисовки вьюхи
+            if (v._subViewTypeStr !== undefined) {
+                v._subViewTypeStr = (v._subViewTypeStr === "monitor") ? "ruler" : "monitor";
+                isMutated = true;
+            }
+            break;
+            
+        case "UPDATE_THEME_MASK":
+            m._isDirty = true;
             isMutated = true;
             break;
     }
     return isMutated;
 }
-
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/modules/dashboard/dashboard_controller.js
- * Время модификации: 18.08.2026 17:08:45 MSK
- */

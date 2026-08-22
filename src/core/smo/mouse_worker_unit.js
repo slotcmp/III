@@ -1,12 +1,12 @@
 /**
  * @file src/core/smo/mouse_worker_unit.js
- * @version 1.0.0-RELEASE-SMO-SYSTEM-MOUSE-FACILITY-DOD
+ * @version 3.6.7-RELEASE-SMO-SYSTEM-MOUSE-ALLOCATION-SAFE
  * @description Инфраструктурный системный СМО-прибор Слота 10 (Control-контур).
- * Выполняет прецизионный хит-тест кликов мыши по флекс-координатам для смены фокуса.
+ * ИСПРАВЛЕН ИНТЕНТ: Адаптирован под прием канонического сигнала MOUSE_INTERRUPT от парсера.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP.
  */
 
-import { generateGpssTransaction } from "./bus.js";
+import { generateGpssTransaction, _gpssEngineState } from "./bus.js";
 import { forceInvalidateShadowCanvas } from "../../io/terminal/flusher.js";
 
 /**
@@ -23,6 +23,10 @@ export function assembleMouseUnit(kernelRef) {
         localQueue: [],
         _head: 0,
         isProcessing: false,
+        
+        componentType: "mouse_unit",
+        displayIndex: 10,
+        
         dispatch: null,
         advanceFacility: null
     };
@@ -43,8 +47,6 @@ export function assembleMouseUnit(kernelRef) {
 
 /**
  * Конвейер продвижения и хит-теста тактовой очереди прерываний мыши
- * @param {Object} unitState Состояние системного прибора 10
- * @returns {boolean} Флаг наличия мутаций рантайма
  */
 export function advanceMouseQueueFacility(unitState) {
     if (!unitState || unitState.isProcessing) return false;
@@ -62,7 +64,7 @@ export function advanceMouseQueueFacility(unitState) {
         return false;
     }
 
-    const allRegisteredKeys = Object.keys(kernel.model?.logicalState?.panelRegistry || Object.create(null));
+    const activeFacilitiesKeys = _gpssEngineState.facilitiesKeysCached;
 
     while (unitState._head < q.length) {
         const tx = q[unitState._head++];
@@ -77,9 +79,15 @@ export function advanceMouseQueueFacility(unitState) {
         let localClickX = 0;
         let localClickY = 0;
 
-        // СКВОЗНОЙ DOD ХИТ-ТЕСТ: Сверяем координаты клика с флекс-геометрией всех бизнес-панелей
-        for (let i = 0; i < allRegisteredKeys.length; i++) {
-            const slotId = allRegisteredKeys[i];
+        // Посимвольный обход исключительно активных интерактивных слотов (100+)
+        for (let i = 0; i < activeFacilitiesKeys.length; i++) {
+            const slotId = activeFacilitiesKeys[i];
+            
+            const slotIdNum = parseInt(slotId, 10);
+            if (isNaN(slotIdNum) || slotIdNum < 100) {
+                continue;
+            }
+            
             const geo = geoMap[slotId];
             if (!geo) continue;
 
@@ -93,30 +101,29 @@ export function advanceMouseQueueFacility(unitState) {
                 hitSlotIdStr = slotId;
                 localClickX = globalX - xStart;
                 localClickY = globalY - yStart;
-                break; // Точка найдена, останавливаем проход по картам
+                break; 
             }
         }
 
-        // Если клик пришелся на валидную панель интерфейса
         if (hitSlotIdStr.length > 0) {
             const currentFocusedId = String(kernel.model.logicalState.focusedSlotId || "");
 
-            // 1. СМЕНА ФОКУСА: Если кликнули на неактивное окно — переключаем глобальный фокус ввода
             if (hitSlotIdStr !== currentFocusedId) {
                 kernel.model.logicalState.focusedSlotId = hitSlotIdStr;
                 
-                // Сбрасываем теневое зеркало холста для гарантированной перерисовки рамок окон
                 if (typeof forceInvalidateShadowCanvas === "function") {
                     forceInvalidateShadowCanvas();
                 }
+
+                if (kernel.virtualCanvasState) {
+                    kernel.virtualCanvasState.isDirty = true;
+                }
                 
-                // Фиксируем факт смены фокуса мыши в системном логгере
-                generateGpssTransaction("108", "ADD_LOG_ENTRY", "[SYSTEM_MOUSE] Фокус ввода переведен на Слот: " + hitSlotIdStr);
+                generateGpssTransaction("108", "ADD_LOG_ENTRY", "[SYSTEM_MOUSE] Клик перевел фокус ввода на Слот: " + hitSlotIdStr + "\n");
                 generateGpssTransaction("1", "EXECUTE_RENDER", null);
                 isMutated = true;
             }
 
-            // 2. ТРАНСЛЯЦИЯ СОБЫТИЯ: Прокидываем СМО-транзакт клика с локальными координатами внутрь целевой панели
             const relativePayload = {
                 globalX: globalX,
                 globalY: globalY,
@@ -126,13 +133,11 @@ export function advanceMouseQueueFacility(unitState) {
             };
             Object.preventExtensions(relativePayload);
 
-            // Перенаправляем интент (например, MOUSE_CLICK или MOVE_CURSOR_DOWN при скролле) в бизнес-слот
             generateGpssTransaction(hitSlotIdStr, mouseAction, relativePayload);
             isMutated = true;
         }
     }
 
-    // Сбрасываем указатели буфера прерываний
     if (unitState._head === q.length) {
         q.length = 0;
         unitState._head = 0;
@@ -141,9 +146,3 @@ export function advanceMouseQueueFacility(unitState) {
     unitState.isProcessing = false;
     return isMutated;
 }
-
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/core/smo/mouse_worker_unit.js
- * Время модификации: 20.08.2026 18:34:10 MSK
- */

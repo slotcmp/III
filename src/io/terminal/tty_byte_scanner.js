@@ -1,15 +1,14 @@
 /**
  * @file src/io/terminal/tty_byte_scanner.js
- * @version 3.4.0-RELEASE-SMO-BYTE-SCANNER-LOGGING-STABLE
+ * @version 3.8.1-RELEASE-SMO-BYTE-SCANNER-RAW-FIXED
  * @description Посимвольный конечный автомат разбора байт TTY (Control-контур).
- * ИСПРАВЛЕНЫ ЛОГИ: Внедрена прямая фиксация нажатий в лог СМО до маршалинга.
+ * ИСПРАВЛЕН ТОЛЧЕК ШИНЫ: Добавлен принудительный пинок реактивного цикла продвижения приборов.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
-import { parseAndDispatchSgr } from "./tty_mouse_parser.js";
-import { generateGpssTransaction } from "../../core/smo/bus.js";
+import { processSgrMouseState } from "./tty_mouse_decoder.js";
 
-// Плоский ОЗУ-регистр состояния парсера ( Hidden Class жестко зафиксирован )
+// Плоский ОЗУ-регистр состояния парсера (Hidden Class жестко зафиксирован)
 export const _scannerState = {
     state: 0,
     btnCode: 0,
@@ -39,6 +38,14 @@ export function scanTtyBytes(rawKeyBuffer, kernel) {
     for (let i = 0; i < len; i++) {
         const b = rawKeyBuffer[i];
 
+        // КРИТИЧЕСКИЙ ГВАРД СИСТЕМНОГО СИГНАЛА: Перехват Ctrl+C (ASCII код 0x03)
+        if (b === 0x03) {
+            if (process.stdout) {
+                process.stdout.write("\x1b[?1049l\x1b[?1003l\x1b[?1006l\x1b[?25h\x1b[0m\n");
+            }
+            process.exit(0);
+        }
+
         // СОСТОЯНИЕ 0: Ожидание управляющего ESC-символа или обычный ввод букв
         if (st.state === 0) {
             if (b === 0x1B) {
@@ -46,35 +53,38 @@ export function scanTtyBytes(rawKeyBuffer, kernel) {
                 continue;
             }
             
-            const charToken = String.fromCharCode(b);
-            const focusedId = String(kernel.model?.logicalState?.focusedSlotId || "105");
+            let charToken = String.fromCharCode(b);
+            let nameToken = charToken.toLowerCase();
             
-            const kbdPayload = { name: charToken.toLowerCase(), sequence: charToken };
+            if (b === 0x7F) { nameToken = "backspace"; charToken = ""; }
+            else if (b === 0x0D || b === 0x0A) { nameToken = "enter"; charToken = "\n"; }
+            else if (b === 0x09) { nameToken = "tab"; charToken = "\t"; }
+
+            const focusedId = String(kernel.model?.logicalState?.focusedSlotId || "105");
+            const kbdPayload = { name: nameToken, sequence: charToken };
             Object.preventExtensions(kbdPayload);
             
-            // ПРЕЦИЗИОННАЯ ЗАПИСЬ В ЛОГ СМО: Фиксируем нажатие до ухода на шину
-            const now = new Date();
-            const h = String(now.getHours()).padStart(2, "0");
-            const m = String(now.getMinutes()).padStart(2, "0");
-            const s = String(now.getSeconds()).padStart(2, "0");
-
-            const logLineStr = "[" + h + ":" + m + ":" + s + " Msk] [INPUT_KEYBOARD] Нажата клавиша (ASCII " + b + "): '" + charToken + "' | Направлено в Слот: " + focusedId + "\n";
-            
-            if (typeof generateGpssTransaction === "function") {
-                generateGpssTransaction("108", "ADD_LOG_ENTRY", logLineStr);
+            if (kernel.workerGateway && typeof kernel.workerGateway.triggerKeyboardBufferParsing === "function") {
+                kernel.workerGateway.triggerKeyboardBufferParsing(focusedId, kbdPayload);
             }
-            
-            // Отправляем транзакт на Канал 4 клавиатуры
-            generateGpssTransaction("4", "PROCESS_KEYPRESS", kbdPayload);
             continue;
         }
 
-        // СОСТОЯНИЕ 1: Ожидание CSI-префикса '[' (0x5B)
+        // СОСТОЯНИЕ 1: Ожидание CSI-префикса '[' (0x5B) ИЛИ разбор Alt+ клавиши
         if (st.state === 1) {
             if (b === 0x5B) {
-                st.state = 2;
+                st.state = 2; // Переходим к разбору мыши/стрелок
             } else {
-                st.state = 0; // Сброс, одиночный ESC (например, кнопка Escape)
+                const altCharToken = String.fromCharCode(b).toLowerCase();
+                const focusedId = String(kernel.model?.logicalState?.focusedSlotId || "105");
+                
+                const altPayload = { name: "alt+" + altCharToken, sequence: "\x1b" + altCharToken };
+                Object.preventExtensions(altPayload);
+
+                if (kernel.workerGateway && typeof kernel.workerGateway.triggerKeyboardBufferParsing === "function") {
+                    kernel.workerGateway.triggerKeyboardBufferParsing(focusedId, altPayload);
+                }
+                st.state = 0; 
             }
             continue;
         }
@@ -84,11 +94,10 @@ export function scanTtyBytes(rawKeyBuffer, kernel) {
             if (b === 0x3C) {
                 st.state = 4; // Поймали '<' — это SGR пакет мыши
                 st._paramIdx = 0;
-                st._chunkBuf0 = "";
-                st._chunkBuf1 = "";
-                st._chunkBuf2 = "";
+                st.btnCode = 0;
+                st.mX = 0;
+                st.mY = 0;
             } else {
-                // Стрелки клавиатуры или функциональные клавиши (F1-F12)
                 const arrowChar = String.fromCharCode(b);
                 let arrowName = "";
                 if (arrowChar === "A") arrowName = "up";
@@ -97,45 +106,22 @@ export function scanTtyBytes(rawKeyBuffer, kernel) {
                 else if (arrowChar === "D") arrowName = "left";
 
                 if (arrowName.length > 0) {
-                    const arrowPayload = { name: arrowName, sequence: "\x1b[" + arrowChar };
+                    const arrowPayload = { name: arrowName, sequence: "" };
                     Object.preventExtensions(arrowPayload);
-                    generateGpssTransaction("4", "PROCESS_KEYPRESS", arrowPayload);
+                    
+                    if (kernel.workerGateway && typeof kernel.workerGateway.triggerKeyboardBufferParsing === "function") {
+                        kernel.workerGateway.triggerKeyboardBufferParsing(String(kernel.model?.logicalState?.focusedSlotId || "105"), arrowPayload);
+                    }
                 }
                 st.state = 0;
             }
             continue;
         }
 
-        // СОСТОЯНИЕ 4: ПОСИМВОЛЬНЫЙ СБОР ПАРАМЕТРОВ SGR МЫШИ
+        // СОСТОЯНИЕ 4: ДЕЛЕГИРУЕМ ВЕКТОРИЗОВАННОМУ ДЕКОДЕРУ МЫШИ
         if (st.state === 4) {
-            if (b === 0x3B) {
-                st._paramIdx++;
-                continue;
-            }
-
-            if (b === 0x4D || b === 0x6D) {
-                st.isRelease = (b === 0x6D);
-                
-                st.btnCode = Math.max(0, parseInt(st._chunkBuf0, 10) || 0);
-                st.mX = Math.max(1, parseInt(st._chunkBuf1, 10) || 1);
-                st.mY = Math.max(1, parseInt(st._chunkBuf2, 10) || 1);
-
-                parseAndDispatchSgr(st.btnCode, st.mX, st.mY, st.isRelease, null, kernel);
-
-                st.state = 0;
-                continue;
-            }
-
-            const digitChar = String.fromCharCode(b);
-            if (st._paramIdx === 0) st._chunkBuf0 += digitChar;
-            else if (st._paramIdx === 1) st._chunkBuf1 += digitChar;
-            else if (st._paramIdx === 2) st._chunkBuf2 += digitChar;
+            // Передаем байт в мономорфный декодер
+            processSgrMouseState(b, kernel);
         }
     }
 }
-
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/io/terminal/tty_byte_scanner.js
- * Время модификации: 20.08.2026 22:20:10 MSK
- */

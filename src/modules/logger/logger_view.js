@@ -1,10 +1,17 @@
 /**
- * @file: src/modules/logger/logger_view.js
- * @path: C:\slotcmd_3\src\modules\logger\logger_view.js
- * @version: 3.0.0-RELEASE-DOD-FORK
- * @description: Пассивное TUI-представление логгера (0% Class).
+ * @file src/modules/logger/logger_view.js
+ * @path src/modules/logger/logger_view.js
+ * @version 3.0.1-RELEASE-SMO-LOGGER-VIEW-RESOLVED
+ * @description Пассивное TUI-представление системного логгера (Presentation-контур).
+ * ИСПРАВЛЕНА ИНДЕКСАЦИЯ И СИМВОЛЫ: Удален остаток от деления %, заблокирован вывод управляющих символов \n.
+ * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
+/**
+ * Фабрика выделения локального запечатанного TUI-буфера отображения логгера Слота 108
+ * @param {string} slotIdStr Идентификатор целевой панели
+ * @returns {Object} Запечатанная мономорфная структура представления
+ */
 export function createLoggerViewInstance(slotIdStr) {
     const viewState = {
         slotId: String(slotIdStr || "108"),
@@ -29,6 +36,11 @@ export function createLoggerViewInstance(slotIdStr) {
     return viewState;
 }
 
+/**
+ * Синхронный накат скользящего окна журнала логов на локальную матрицу ОЗУ прибора
+ * @param {Object} view Ссылка на буфер отображения прибора
+ * @param {Object} mdl Ссылка на мономорфную модель данных логов
+ */
 export function renderLoggerContent(view, mdl) {
     if (!view || !mdl || !view.localBuffer.matrix) return;
 
@@ -36,7 +48,7 @@ export function renderLoggerContent(view, mdl) {
     const currentW = Math.max(1, Math.floor(view.width || 120));
     const currentH = Math.max(1, Math.floor(view.height || 6));
 
-    // Очищаем внутренности рамки
+    // Очищаем внутреннее пространство окна строго внутри стальных рамок
     for (let y = 1; y < currentH - 1; y++) {
         const row = m[y];
         if (!row) continue;
@@ -51,25 +63,43 @@ export function renderLoggerContent(view, mdl) {
     const maxVisibleLines = currentH - 2;
     if (totalLines === 0) return;
 
-    // Вычисляем окно прокрутки логов с конца кольцевого буфера
-    let startIdx = totalLines - maxVisibleLines - Math.floor(mdl.viewportOffset || 0);
+    // ИСПРАВЛЕНИЕ: Вычисляем начальное смещение окна просмотра по плоскому массиву logsArray
+    // Учитывается скроллинг через viewportOffset, зажатый гвардами границ
+    let startIdx = totalLines - maxVisibleLines - Math.max(0, Math.floor(mdl.viewportOffset || 0));
     if (startIdx < 0) startIdx = 0;
 
     for (let i = 0; i < maxVisibleLines; i++) {
         const currentLineIdx = startIdx + i;
         if (currentLineIdx >= totalLines) break;
 
-        const rawLineStr = String(mdl.logsArray[currentLineIdx % mdl.maxLines] || "");
+        // ИСПРАВЛЕНИЕ: Прямое чтение индекса без деструктивной операции % mdl.maxLines
+        const rawLineStr = String(mdl.logsArray[currentLineIdx] || "");
         const targetRowY = 1 + i;
         const row = m[targetRowY];
 
         if (row) {
-            const printLen = Math.min(rawLineStr.length, currentW - 2);
-            for (let x = 0; x < printLen; x++) {
-                if (1 + x < currentW - 1) {
-                    row[1 + x].char = rawLineStr.charAt(x);
-                    row[1 + x].fg = "\x1b[38;5;246m"; // Неяркий серый след трассировки
+            const bufferLen = rawLineStr.length;
+            const maxTextCols = currentW - 2;
+            let screenX = 1; // Стартовый TUI отступ справа от левой рамки окна ║
+
+            for (let x = 0; x < bufferLen; x++) {
+                if (screenX >= maxTextCols) break;
+
+                const code = rawLineStr.charCodeAt(x);
+                
+                // КРИТИЧЕСКИЙ ГВАРД: Полностью отсекаем непечатные символы перевода строк \n и \r
+                // Это гарантирует защиту от срыва швов рамок окон при блайтинге в ConPTY дескриптор
+                if (code === 0x0A || code === 0x0D) {
+                    continue;
                 }
+
+                const cell = row[screenX];
+                if (cell) {
+                    cell.char = rawLineStr.charAt(x);
+                    cell.fg = "\x1b[38;5;244m"; // Стальной серый след системной трассировки
+                    cell.bg = "\x1b[40m";
+                }
+                screenX++;
             }
         }
     }

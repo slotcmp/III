@@ -1,18 +1,16 @@
 /**
  * @file src/core/smo/keyboard_worker_unit.js
- * @version 3.2.0-RELEASE-SMO-KEYBOARD-INTERACTIVE
+ * @version 3.8.0-RELEASE-SMO-KEYBOARD-UNIT-STRICT-PIPELINE
  * @description Инфраструктурный клавиатурный СМО-прибор Канала 4 (Control-контур).
- * Изменена локальная логика прибора: интегрирован разбор ANSI-стрелок навигации и Tab-смены панелей.
+ * ИСПРАВЛЕНА СИНХРОНИЗАЦИЯ: Роутинг полностью сопряжен со сквозным абстрактным facility_pipeline.js.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP.
  */
 
-import { generateGpssTransaction } from "./bus.js";
+import { generateGpssTransaction, _gpssEngineState } from "./bus.js";
 import { forceInvalidateShadowCanvas } from "../../io/terminal/flusher.js";
 
 /**
  * Фабрика сборки мономорфной структуры клавиатурного прибора Канала 4
- * @param {Object} kernelRef Ссылка на ОЗУ-рантайм хоста ядра
- * @returns {Object} Запечатанная структура прибора
  */
 export function assembleKeyboardUnit(kernelRef) {
     if (!kernelRef) return null;
@@ -33,6 +31,11 @@ export function assembleKeyboardUnit(kernelRef) {
         return true;
     };
 
+    keyboardFacility.specificAdvanceWorker = (facilityState, intentStr, payloadObj, currentTx) => {
+        // Извлекаем рантайм хоста напрямую из стейта прибора
+        return processKeyboardCoreLogic(facilityState.host, intentStr, payloadObj);
+    };
+
     keyboardFacility.advanceFacility = () => {
         return advanceQueueFacility(keyboardFacility);
     };
@@ -42,10 +45,78 @@ export function assembleKeyboardUnit(kernelRef) {
 }
 
 /**
- * Конвейер продвижения и редукции тактовой очереди клавиатурных прерываний
- * @param {Object} unitState Состояние активного клавиатурного прибора
- * @returns {boolean} Флаг наличия мутаций рантайма
+ * Выделенное ядро редукции клавиатурных интентов Канала 4
  */
+function processKeyboardCoreLogic(kernel, intentStr, payload) {
+    if (!kernel) return false;
+    const activeFocusedId = String(kernel.model?.logicalState?.focusedSlotId || "105");
+    
+    // КЕЙС 1: Переключение фокуса по Alt+[1-6]
+    if (intentStr === "FOCUS_CHANGED_BY_NUMBER" && payload !== undefined) {
+        const targetDisplayIdx = Math.floor(Number(payload) || 1);
+        const activeFacilitiesKeys = _gpssEngineState.facilitiesKeysCached;
+        const len = activeFacilitiesKeys.length;
+        let foundSlotIdStr = "";
+        
+        for (let i = 0; i < len; i++) {
+            const slotId = activeFacilitiesKeys[i];
+            if (slotId === "0" || slotId === "1" || slotId === "4" || slotId === "9" || slotId === "10") continue;
+            
+            const facility = _gpssEngineState.facilitiesRegistry.get(slotId);
+            if (facility && Math.floor(facility.displayIndex || 0) === targetDisplayIdx) {
+                foundSlotIdStr = slotId;
+                break;
+            }
+        }
+        
+        if (foundSlotIdStr.length > 0) {
+            const currentFocused = String(kernel.model?.logicalState?.focusedSlotId || "");
+            
+            if (foundSlotIdStr !== currentFocused) {
+                kernel.model.logicalState.focusedSlotId = foundSlotIdStr;
+                
+                // Очищаем кэш блайтера для мгновенной перерисовки Unicode-контуров
+                if (typeof forceInvalidateShadowCanvas === "function") {
+                    forceInvalidateShadowCanvas();
+                }
+
+                if (kernel.virtualCanvasState) {
+                    kernel.virtualCanvasState.isDirty = true;
+                }
+                
+                generateGpssTransaction("108", "ADD_LOG_ENTRY", "[SYSTEM_KEYBOARD] Горячая клавиша ALT+" + targetDisplayIdx + " перевела фокус на Слот: " + foundSlotIdStr + "\n");
+                generateGpssTransaction("1", "EXECUTE_RENDER", null);
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    // КЕЙС 2: Навигация (стрелки)
+    if (intentStr === "MOVE_CURSOR_UP" || intentStr === "MOVE_CURSOR_DOWN") {
+        generateGpssTransaction(activeFocusedId, intentStr, payload);
+        return true;
+    }
+
+    // КЕЙС 3: Исполнение строки ввода команд
+    if (intentStr === "ENTER_PRESSED") {
+        if (activeFocusedId === "105") {
+            generateGpssTransaction("105", "EXECUTE_COMMAND", null);
+        } else {
+            generateGpssTransaction(activeFocusedId, "ENTER_PRESSED", null);
+        }
+        return true;
+    }
+
+    // КЕЙС 4: Печать символов
+    if (intentStr === "KEY_PRESSED") {
+        generateGpssTransaction(activeFocusedId, "KEY_PRESSED", payload);
+        return true;
+    }
+
+    return false;
+}
+
 /**
  * Продвижение тактовой очереди клавиатурного прибора (Канал 4)
  */
@@ -58,37 +129,23 @@ function advanceQueueFacility(facilityState) {
     facilityState.isProcessing = true;
     let isStateMutated = false;
 
-    // Извлекаем контекст логгера из ОЗУ ядра хоста
-    const hostAppSettings = facilityState.host?.model?.logicalState?.appSettings;
-    const bKeyLogBypassBool = !!(hostAppSettings?.ttni?.bKeyLogBypass);
-
     while (facilityState._head < q.length) {
         const tx = q[facilityState._head++];
         if (!tx) continue;
 
         const currentIntentStr = String(tx.P2 || "");
+        const payload = tx.P3;
 
-        // ГВАРД ЛОГИРОВАНИЯ: Если байпас выключен (false) — пишем нажатие в файл smo.log
-        if (!bKeyLogBypassBool && currentIntentStr === "KEY_PRESSED") {
-            const payload = tx.P3;
-            const targetChar = payload ? String(payload.char || "") : "";
-            
-            const now = new Date();
-            const h = String(now.getHours()).padStart(2, "0");
-            const m = String(now.getMinutes()).padStart(2, "0");
-            const s = String(now.getSeconds()).padStart(2, "0");
-
-            // Прямая атомарная запись следа в логгер СМО (Слот 108)
-            const logLineStr = "[" + h + ":" + m + ":" + s + " Msk] [INPUT_KEYBOARD] Интент: KEY_PRESSED | Символ: '" + targetChar + "' | Фокусный Слот: " + String(facilityState.host?.model?.logicalState?.focusedSlotId || "105") + "\n";
-            
-            if (typeof generateGpssTransaction === "function") {
-                generateGpssTransaction("108", "ADD_LOG_ENTRY", logLineStr);
-            }
+        let resolvedIntent = currentIntentStr;
+        let resolvedPayload = payload;
+        
+        if (currentIntentStr === "EXECUTE_RESOLVED_KEY" && payload) {
+            resolvedIntent = String(payload.action || "");
+            resolvedPayload = payload.payload;
         }
 
-        // Пропускаем интент дальше в стандартный фильтр прибора
         if (facilityState.specificAdvanceWorker) {
-            const hasMutations = facilityState.specificAdvanceWorker(facilityState, currentIntentStr, tx.P3, tx);
+            const hasMutations = facilityState.specificAdvanceWorker(facilityState, resolvedIntent, resolvedPayload, tx);
             if (hasMutations === true) isStateMutated = true;
         }
     }
@@ -102,9 +159,8 @@ function advanceQueueFacility(facilityState) {
     return isStateMutated;
 }
 
-
 /** 
  * ПАСПОРТ ЛИСТИНГА:
  * Путь: src/core/smo/keyboard_worker_unit.js
- * Время модификации: 18.08.2026 21:46:45 MSK
+ * Время модификации: 21.08.2026 16:14:20 MSK
  */

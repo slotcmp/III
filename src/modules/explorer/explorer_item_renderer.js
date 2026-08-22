@@ -1,5 +1,5 @@
 /**
- * @file src/modules/explorer/explorer_item_drawer.js
+ src/modules/explorer/explorer_item_renderer.js
  * @version 3.0.2-RELEASE-SMO-EXPLORER-ITEM-DRAWER-DOD
  * @description Пассивный процедурный отрисовщик строк файлов и директорий для проводников 102/103.
  * Осуществляет посимвольный blit-перенос метаданных VFS в мономорфные ячейки ОЗУ.
@@ -36,6 +36,6 @@ export function drawExplorerItem(row, fileItem, currentW, isRowSelected) {
 
 /** 
  * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/modules/explorer/explorer_item_drawer.js
+  src/modules/explorer/explorer_item_renderer.js
  * Время модификации: 18.08.2026 17:21:10 MSK
  */

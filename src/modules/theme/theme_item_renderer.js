@@ -1,5 +1,5 @@
 /**
- * @file src/modules/theme/theme_item_drawer.js
+ * @file src/modules/theme/theme_item_renderer.js
  * @version 3.0.0-RELEASE-DOD-FORK
  * @description Чистый пассивный DOD-отрисовщик строки выбора темы оформления (Presentation-контур).
  * Выполняет посимвольный blit-перенос названий палитр в ячейки строки с инжекцией маркера фокуса.
@@ -35,6 +35,6 @@ export function drawThemeItem(row, themeItem, currentW, isSelected) {
 
 /** 
  * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/modules/theme/theme_item_drawer.js
+ * @file src/modules/theme/theme_item_renderer.js
  * Время модификации: 18.08.2026 18:14:10 MSK
  */

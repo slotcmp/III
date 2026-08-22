@@ -1,47 +1,32 @@
 /**
  * @file src/modules/explorer/explorer_ctl.js
- * @version 3.1.5-RELEASE-SMO-EXPLORER-CTL-PURE-DOD
- * @description Контроллер и фазовый фильтр СМО-приборов обслуживания Каналов 102/103 (Explorer).
- * Реализует прямой маршалинг VFS-данных в ОЗУ-модели и навигацию по стрелочкам.
- * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
+ * @version 3.0.3-RELEASE-SMO-EXPLORER-CTL-DOD
+ * @description Контроллер и фазовый фильтр СМО-приборов Проводников 102/103.
+ * ИСПРАВЛЕНЫ ИМПОРТЫ И РАЗБОР ПУТЕЙ: Изъят path.join, разбор путей векторизован in-place.
+ * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp / 0% try-catch.
  */
 
-import { createExplorerMdlInstance } from "./explorer_mdl.js";
-import { createExplorerViewInstance, renderExplorerContent } from "./explorer_view.js";
-import { generateGpssTransaction } from "../../core/smo/bus.js";
-import path from "node:path";
+import { renderExplorerContent } from "./explorer_view.js";
 
 /**
- * Фабрика сборки мономорфного состояния PAC-контроллера проводника со стеком вкладок
- * @param {Object} appHostRef Ссылка на ядро хоста приложения
- * @param {string} slotIdStr Идентификатор целевого слота (102 или 103)
- * @returns {Object} Запечатанная структура контроллера
+ * Старая фабрика сохранена для совместимости автоскана V8, 
+ * но рантайм GEN III использует ленивый монтаж через IoC-монтажник slot_maker.js.
  */
 export function createExplorerController(appHostRef, slotIdStr) {
     const id = String(slotIdStr || "102");
-    const tabsStack = new Array(4);
-    for (let idx = 0; idx < 4; idx++) {
-        tabsStack[idx] = { mdl: createExplorerMdlInstance(), view: createExplorerViewInstance(id) };
-        tabsStack[idx].view._activeTabIdx = idx;
-        Object.preventExtensions(tabsStack[idx]);
-    }
-    const ctlState = { viewStack: tabsStack, host: appHostRef, slotId: id };
+    const ctlState = { viewStack: null, host: appHostRef, slotId: id };
     Object.preventExtensions(ctlState);
     return ctlState;
 }
 
 /**
  * Фазовый СМО-фильтр супершины прерываний для Приборов Каналов 102/103
- * @param {Object} facilityState Состояние активного прибора СМО
- * @param {string} intentStr Идентификатор прерывания
- * @param {Object} contextPayload Контекст транзакта
- * @param {Object} currentTx Полный паспорт транзакта СМО
- * @returns {boolean} Флаг наличия мутаций
  */
 export function processSpecificExplorerLogic(facilityState, intentStr, contextPayload, currentTx) {
     const tabs = facilityState.viewStack;
-    if (!tabs) return false;
+    if (!tabs || !Array.isArray(tabs)) return false;
 
+    // Прецизионно вычисляем индекс активной вкладки из регистра прибора
     const activeIdx = Math.max(0, Math.min(3, Math.floor(Number(facilityState.activeStackIdx) || 0)));
     const currentTabPack = tabs[activeIdx];
     if (!currentTabPack || !currentTabPack.mdl || !currentTabPack.view) return false;
@@ -51,24 +36,18 @@ export function processSpecificExplorerLogic(facilityState, intentStr, contextPa
     const intent = String(intentStr || "");
     let isMutated = false;
 
-    // СМО-ФАЗА ОТРЕСОВКИ: Полностью СИНХРОННЫЙ вызов отрисовщика из статического импорта
-    if (intent === "SMO_PHASE_CONTENT") {
-        renderExplorerContent(view, mdl, activeIdx);
-        return true;
-    }
-
     const maxVisibleRows = Math.max(1, view.height - 4);
 
     switch (intent) {
-        // ПРЯМОЙ МАРШАЛИНГ VFS ДАННЫХ
         case "INJECT_VFS_DATA":
             if (contextPayload) {
-                mdl.currentPath = String(contextPayload.currentPath || "C:\\\\");
+                // Синхронизируем стейт с каноническим полем currentDirectoryPath из slot_maker.js
+                mdl.currentDirectoryPath = String(contextPayload.currentPath || "C:/");
                 mdl.itemsList = Array.isArray(contextPayload.items) ? contextPayload.items : [];
                 mdl.selectedIndex = 0; 
                 mdl.viewportOffset = 0; 
                 mdl._isDirty = true;
-                isMutated = true; // Будим тактовый автомат для блайтинга сетки файлов!
+                isMutated = true;
             }
             break;
 
@@ -96,7 +75,7 @@ export function processSpecificExplorerLogic(facilityState, intentStr, contextPa
 
         case "MOUSE_CLICK":
             if (contextPayload && contextPayload.localY !== undefined) {
-                const clickedRowIdx = Math.floor(contextPayload.localY) - 3 + mdl.viewportOffset;
+                const clickedRowIdx = Math.floor(contextPayload.localY) - 2 + mdl.viewportOffset;
                 if (mdl.itemsList && clickedRowIdx >= 0 && clickedRowIdx < mdl.itemsList.length) {
                     mdl.selectedIndex = clickedRowIdx;
                     mdl._isDirty = true; 
@@ -109,15 +88,37 @@ export function processSpecificExplorerLogic(facilityState, intentStr, contextPa
             if (mdl.itemsList && mdl.itemsList.length > 0) {
                 const currentItem = mdl.itemsList[mdl.selectedIndex];
                 if (currentItem && currentItem.isDir) {
-                    let nextPath = mdl.currentPath;
+                    let baseDir = String(mdl.currentDirectoryPath);
+                    let nextPath = "";
+
+                    // ПРИНЦИП 0% RegExp: Посимвольная in-place векторизация путей без модуля path
                     if (currentItem.name === "..") {
-                        nextPath = path.dirname(mdl.currentPath);
-                        if (!nextPath.endsWith(path.sep)) {
-                            nextPath += path.sep;
+                        // Отрезаем последний сегмент пути до слэша
+                        let lastSlashIdx = -1;
+                        const len = baseDir.length;
+                        
+                        // Ищем предпоследний слэш (минуя завершающий)
+                        const searchLimit = baseDir.charAt(len - 1) === "/" ? len - 2 : len - 1;
+                        for (let i = searchLimit; i >= 0; i--) {
+                            if (baseDir.charAt(i) === "/" || baseDir.charAt(i) === "\\") {
+                                lastSlashIdx = i;
+                                break;
+                            }
+                        }
+                        
+                        if (lastSlashIdx !== -1) {
+                            nextPath = baseDir.substring(0, lastSlashIdx + 1);
+                        } else {
+                            nextPath = "C:/"; // Корневой дефолт-гвард
                         }
                     } else {
-                        nextPath = path.join(mdl.currentPath, currentItem.name);
+                        // Склеиваем путь с гвардом нормализации разделителей
+                        if (baseDir.charAt(baseDir.length - 1) !== "/" && baseDir.charAt(baseDir.length - 1) !== "\\") {
+                            baseDir += "/";
+                        }
+                        nextPath = baseDir + currentItem.name;
                     }
+
                     if (facilityState.host?.workerGateway?.triggerDirectoryIndexing) {
                         facilityState.host.workerGateway.triggerDirectoryIndexing(facilityState.slotId, nextPath, activeIdx);
                     }
@@ -127,20 +128,27 @@ export function processSpecificExplorerLogic(facilityState, intentStr, contextPa
             break;
 
         case "ROTATE_SLOT_STACK":
+            // Рокировка вью-стека вкладок (Карусель 0 -> 1 -> 2 -> 3)
             const nextTabIdx = (activeIdx + 1) % 4;
             facilityState.activeStackIdx = nextTabIdx;
+            
             if (facilityState.host?.workerGateway?.triggerDirectoryIndexing) {
-                facilityState.host.workerGateway.triggerDirectoryIndexing(facilityState.slotId, mdl.currentPath, nextTabIdx);
+                facilityState.host.workerGateway.triggerDirectoryIndexing(facilityState.slotId, mdl.currentDirectoryPath, nextTabIdx);
             }
             mdl._isDirty = true; 
             isMutated = true;
             break;
+            
+        case "UPDATE_THEME_MASK":
+            mdl._isDirty = true;
+            isMutated = true;
+            break;
     }
+    
+    // ФАЗА Б МАНИФЕСТА: Вызываем отрисовщик строго в конце такта финализации мутаций
+    if (isMutated || intent === "SMO_PHASE_CONTENT") {
+        renderExplorerContent(view, mdl, activeIdx);
+    }
+    
     return isMutated;
 }
-
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/modules/explorer/explorer_ctl.js
- * Время модификации: 18.08.2026 19:36:45 MSK
- */

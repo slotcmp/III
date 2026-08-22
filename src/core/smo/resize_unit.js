@@ -1,8 +1,8 @@
 ﻿/**
  * @file src/core/smo/resize_unit.js
- * @version 3.2.2-RELEASE-SMO-RESIZE-PURE-TRANSACT-RESOLVED
+ * @version 3.5.5-RELEASE-SMO-RESIZE-PIPELINE-SAFE
  * @description Модуль обслуживания Фазы 1-3 СМО (Прибор Канала 9 / resize_unit).
- * Пассивный асинхронный маршаллер (ASYNC): исправлена гонка деструктуризации параметров ctx прерывания.
+ * ИСПРАВЛЕН КРАШ V8: Мутации ширины перенаправлены на открытые регистры геометрии ядра хоста.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
@@ -21,106 +21,75 @@ function appendGeoMetricsLogGuard(messageStr) {
 }
 
 /**
- * Фабрика сборки мономорфной структуры прибора обслуживания (Канал 9)
- * @param {Object} appGpssBusRef Ссылка на шину СМО
- * @returns {Object} Запечатанное состояние прибора
+ * Фазовый СМО-фильтр супершины прерываний для Прибора Канала 9 (Resize)
+ * @param {Object} facilityState Состояние активного инфраструктурного прибора СМО
+ * @param {string} intentStr Идентификатор прерывания (TRIGGER_RESIZE или INJECT_GEO_MAP)
+ * @param {Object} contextPayload Контекст транзакта (метрики консоли или скомпилированная карта)
+ * @param {Object} currentTx Полный паспорт транзакта СМО
+ * @returns {boolean} Флаг наличия мутаций рантайма для взвода IsDirty
  */
-export function assemble(appGpssBusRef) {
-    const unitState = {
-        hub: appGpssBusRef,
-        localQueue: [],
-        isProcessing: false,
-        _head: 0,
-        componentType: "resize_unit",
-        displayIndex: 9,
-        dispatch: (actionType, transaction) => {
-            if (!transaction || typeof transaction !== "object") return false;
-            if (typeof transaction.P2 === "undefined") {
-                const normalizedTx = { P1: "9", P2: String(actionType || "UNKNOWN_ACTION"), P3: transaction };
-                Object.preventExtensions(normalizedTx);
-                unitState.localQueue.push(normalizedTx);
-                return true;
-            }
-            unitState.localQueue.push(transaction);
-            return true;
-        },
-        advanceFacility: () => advanceQueueFacility(unitState)
-    };
-    Object.preventExtensions(unitState);
-    return unitState;
-}
+export function processSpecificResizeLogic(facilityState, intentStr, contextPayload, currentTx) {
+    if (!facilityState) return false;
+    
+    const kernel = facilityState.host;
+    if (!kernel) return false;
 
-/**
- * Чистый транзакционный конвейер продвижения Канала 9
- * @param {Object} unitState Состояние прибора
- * @returns {boolean} Флаг наличия мутаций рантайма
- */
-function advanceQueueFacility(unitState) {
-    const r = unitState.hub;
-    const q = unitState.localQueue;
-    if (!r || unitState.isProcessing || q.length === unitState._head) return false;
-    unitState.isProcessing = true;
-    let hasMutations = false;
+    const intent = String(intentStr || "");
+    const ctx = contextPayload;
 
-    while (unitState._head < q.length) {
-        const tx = q[unitState._head++];
-        if (!tx) continue;
-        const intent = String(tx.P2 || "");
-        const ctx = tx.P3;
-
-        // ФАЗА А: ПРЕРЫВАНИЕ ТЕРМИНАЛА (РЕАКЦИЯ НА ИЗМЕНЕНИЕ ОКНА ОС)
-        if (intent === "TRIGGER_RESIZE" && ctx) {
-            // ПРЕЦИЗИОННОЕ ИСПРАВЛЕНИЕ: Вытягиваем динамические координаты ИЗ транзакта прерывания
-            const targetW = Math.max(40, Math.floor(ctx.w || 120));
-            const targetH = Math.max(10, Math.floor(ctx.h || 30));
-            
-            if (r.model) {
-                r.model.width = targetW; 
-                r.model.height = targetH;
-            }
-            
-            // АСИНХРОННЫЙ ОТГРУЗ В ПОТОК: Передаем новые, изменившиеся пиксели консоли воркеру!
-            if (r.workerGateway && typeof r.workerGateway.triggerGeometryCalculation === "function") {
-                const layoutTree = r.model?.layoutTree || r.layoutTopologyTree;
-                const settingsObj = r.model?.logicalState?.appSettings;
-                r.workerGateway.triggerGeometryCalculation(layoutTree, targetW, targetH, settingsObj, tx.id);
-            }
-            hasMutations = true;
-        } 
+    // ФАЗА А: ПРЕРЫВАНИЕ ТЕРМИНАЛА (ОС ИЗМЕНИЛА ФИЗИЧЕСКИЕ РАЗМЕРЫ ОКНА)
+    if (intent === "TRIGGER_RESIZE" && ctx) {
+        const targetW = Math.max(40, Math.floor(ctx.w || 120));
+        const targetH = Math.max(10, Math.floor(ctx.h || 30));
         
-        // ФАЗА Б: ИНЖЕКЦИЯ СКОМПИЛИРОВАННОЙ КАРТЫ ОТ ВОРКЕРА
-        else if (intent === "INJECT_GEO_MAP" && ctx) {
-            if (typeof r.updateGeometryMap === "function") {
-                r.updateGeometryMap(ctx);
-            }
-            
-            if (typeof forceInvalidateShadowCanvas === "function") {
-                forceInvalidateShadowCanvas();
-            }
-
-            const now = new Date();
-            const h = String(now.getHours()).padStart(2, "0");
-            const m = String(now.getMinutes()).padStart(2, "0");
-            const s = String(now.getSeconds()).padStart(2, "0");
-            const rootGeo = ctx["root"] || { w: 120, h: 30 };
-            
-            const geoMetricsLineStr = "[" + h + ":" + m + ":" + s + " Msk] [СМО_GEOMETRY_METRICS] Габариты TUI-матрицы рассчитаны: Ширина=" + 
-                                      Math.floor(rootGeo.w) + " знакомест | Высота=" + Math.floor(rootGeo.h) + " строк\n";
-            appendGeoMetricsLogGuard(geoMetricsLineStr);
-
-            // Передаем эстафету Каналу 1 для перерисовки растра по новым, рассчитанным воркером координатам
-            generateGpssTransaction("1", "EXECUTE_RENDER", null);
-            hasMutations = true;
+        // Пишем строго в базовые регистры ядра, инициализированные при старте index.js
+        kernel.width = targetW; 
+        kernel.height = targetH;
+        
+        if (kernel.model && kernel.model.width !== undefined) {
+            kernel.model.width = targetW;
+            kernel.model.height = targetH;
         }
+        
+        if (kernel.workerGateway && typeof kernel.workerGateway.triggerGeometryCalculation === "function") {
+            const layoutTree = kernel.model?.layoutTree || kernel.layoutTopologyTree;
+            const settingsObj = kernel.model?.logicalState?.appSettings;
+            kernel.workerGateway.triggerGeometryCalculation(layoutTree, targetW, targetH, settingsObj, currentTx.id);
+        }
+        return true; 
+    } 
+    
+    // ФАЗА Б: ИНЖЕКЦИЯ СКОМПИЛИРОВАННОЙ КАРТЫ ОТ ВОРКЕРА ГЕОМЕТРИИ
+    if (intent === "INJECT_GEO_MAP" && ctx) {
+        if (typeof kernel.updateGeometryMap === "function") {
+            kernel.updateGeometryMap(ctx);
+        }
+        
+        if (typeof forceInvalidateShadowCanvas === "function") {
+            forceInvalidateShadowCanvas();
+        }
+
+        const now = new Date();
+        const h = String(now.getHours()).padStart(2, "0");
+        const m = String(now.getMinutes()).padStart(2, "0");
+        const s = String(now.getSeconds()).padStart(2, "0");
+        const rootGeo = ctx["root"] || { w: 120, h: 30 };
+        
+        const geoMetricsLineStr = "[" + h + ":" + m + ":" + s + " Msk] [СМО_LAYOUT] Геометрия TUI пересчитана воркером: W=" + 
+                                  Math.floor(rootGeo.w) + " знакомест | H=" + Math.floor(rootGeo.h) + " строк\n";
+        
+        appendGeoMetricsLogGuard(geoMetricsLineStr);
+
+        generateGpssTransaction("108", "ADD_LOG_ENTRY", geoMetricsLineStr);
+        generateGpssTransaction("1", "EXECUTE_RENDER", null);
+        return true; 
     }
 
-    if (unitState._head === q.length) { q.length = 0; unitState._head = 0; }
-    unitState.isProcessing = false;
-    return hasMutations;
+    return false;
 }
 
 /** 
  * ПАСПОРТ ЛИСТИНГА:
  * Путь: src/core/smo/resize_unit.js
- * Время модификации: 18.08.2026 23:46:12 MSK
+ * Время модификации: 21.08.2026 17:09:20 MSK
  */

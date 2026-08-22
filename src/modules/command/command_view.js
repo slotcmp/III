@@ -1,6 +1,6 @@
 /**
- * @file: src/modules/command/view.js
- * @path: C:\slotcmd_3\src\modules\command\view.js
+ * @file: src/modules/command_view.js
+ * @path: C:\slotcmd_3\src\modules\command_view.js
  * @version: 3.0.0-RELEASE-DOD-FORK
  * @description: Пассивное TUI-представление Командной строки. Осуществляет посимвольное впекание растра (0% RegExp, No BOM, 0% Class).
  * @revision: #0817-COMMAND-VIEW-DOD

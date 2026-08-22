@@ -7,17 +7,16 @@
       "debugMouse": false
     }
   },
-   "ttni": {
+  "ttni": {
     "bOff": true,
     "bTrace": false,
     "bLogsIgnore": true,
     "bCaller": false,
-    "bKeyLogBypass": false, 
-    "bSlotLogBypass": true,
+    "bKeyLogBypass": false,
+    "bSlotLogBypass": false,
     "pivotNode": "main_workspace",
     "maxDepth": 1
   },
-
   "logLevelMsk": {
     "BOOT_SEQUENCE": "INFO",
     "VFS_REDUCER": "INFO",
@@ -30,7 +29,7 @@
     "PLATFORM_MOUSE": "INFO",
     "GPSS_GENERATE": "INFO",
     "GPSS_SHIPPED": "INFO",
-    "UPDATE_VIEW": "NONE"
+    "UPDATE_VIEW": "INFO"
   },
   "lastFocusedSlotId": "105",
   "activeThemeIdx": 2,

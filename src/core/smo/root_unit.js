@@ -1,109 +1,82 @@
 /**
  * @file src/core/smo/root_unit.js
- * @version 3.0.1-RELEASE-SMO-ROOT-UNIT-DOD
- * @description Верховный инфраструктурный прибор обслуживания СМО (Канал 0).
- * Координирует первичный запуск ядра, глобальную смену тем оформления и рефреш экранов.
- * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
+ * @version 3.9.3-RELEASE-SMO-ROOT-SEQUENCE-BARRIER
+ * @description Системный СМО-прибор Слота 0 (Инициализатор/Гидратор).
+ * ИСПРАВЛЕН БУТСТРАП: Запечатывание перенесено на фазу LOAD_SEQUENCE_COMPLETED.
+ * Выполнен в строгой парадигме PAC / DOD / 0% OOP.
  */
 
-import { generateGpssTransaction } from "./bus.js";
-import { forceInvalidateShadowCanvas } from "../../io/terminal/flusher.js";
-
-const _rootSystemState = { isBooted: false };
-Object.preventExtensions(_rootSystemState);
+import { generateGpssTransaction, _gpssEngineState } from "./bus.js";
+import { executeDeferredSynchronization } from "../slot_maker.js";
+import { listenHardwareInterrupts, enterAlternativeHardwareBuffer } from "../../io/terminal/tty_hardware_gate.js";
 
 /**
- * Фабрика структуры: аллокация и прогрев состояния СМО-прибора Канала 0
- * @param {Object} appGpssBusRef Ссылка на шину СМО
- * @returns {Object} Запечатанное состояние прибора
+ * Чистая процедура редукции Слота 0. Динамически векторизует первичный импульс по всем бизнес-слотам
  */
-export function assemble(appGpssBusRef) {
-    const unitState = {
-        hub: appGpssBusRef,
-        localQueue: [],
-        isProcessing: false,
-        _head: 0,
-        componentType: "root_unit",
-        displayIndex: 0,
-        
-        dispatch: null,
-        advanceFacility: null
-    };
+export function processSpecificRootLogic(facilityState, intentStr, contextPayload, currentTx) {
+    if (!facilityState) return false;
+    const kernel = facilityState.host;
+    if (!kernel) return false;
 
-    unitState.dispatch = (actionType, transaction) => {
-        if (!transaction) return false;
-        unitState.localQueue.push(transaction);
-        return true;
-    };
+    const intent = String(intentStr);
 
-    unitState.advanceFacility = () => {
-        return advanceQueueFacility(unitState);
-    };
+    if (intent === "init") {
+        return true; 
+    }
 
-    Object.preventExtensions(unitState);
-    return unitState;
-}
-
-/**
- * Чистая процедура продвижения очереди прерываний верховного Прибора 0
- * @param {Object} unitState Состояние прибора
- * @returns {boolean} Флаг наличия мутаций рантайма
- */
-function advanceQueueFacility(unitState) {
-    const r = unitState.hub;
-    const q = unitState.localQueue;
-    if (!r || unitState.isProcessing || q.length === unitState._head) return false;
-
-    unitState.isProcessing = true;
-    let hasMutations = false;
-
-    while (unitState._head < q.length) {
-        const tx = q[unitState._head];
-        unitState._head++;
-        if (!tx) continue;
-
-        const intent = String(tx.P2 || "");
-        const payloadObj = tx.P3;
-
-        switch (intent) {
-            case "init":
-                if (!_rootSystemState.isBooted) {
-                    _rootSystemState.isBooted = true;
-                    hasMutations = true;
-                    
-                    // СМО-МАРШАЛИНГ: Передаем импульс ресайза на Прибор Канала 9
-                    generateGpssTransaction("9", "TRIGGER_RESIZE", {
-                        w: Math.max(40, process.stdout.columns || 120),
-                        h: Math.max(10, process.stdout.rows || 30)
-                    });
+    // ФАЗА 2: АТОМАРНЫЙ СИНХРОННЫЙ МОНТАЖ ТРИАДЫ ИЗ SLOT_MAKER
+    if (intent === "SYNCHRONIZE_DYNAMIC_SLOT" && contextPayload) {
+        if (typeof executeDeferredSynchronization === "function") {
+            const success = executeDeferredSynchronization(kernel, contextPayload);
+            if (success === true) {
+                _gpssEngineState.facilitiesKeysCached = Array.from(_gpssEngineState.facilitiesRegistry.keys());
+                
+                if (kernel.virtualCanvasState) {
+                    kernel.virtualCanvasState.isDirty = true;
                 }
-                break;
-
-            case "GLOBAL_THEME_CHANGED":
-                if (payloadObj && payloadObj.colorMask && r.model?.logicalState?.appSettings) {
-                    r.model.logicalState.appSettings.currentBorderAnsiMask = String(payloadObj.colorMask);
-                    if (typeof forceInvalidateShadowCanvas === "function") forceInvalidateShadowCanvas();
-                    hasMutations = true;
-                }
-                break;
-
-            case "UPDATE_VIEW":
-                hasMutations = true;
-                break;
+                return true;
+            }
         }
     }
 
-    if (unitState._head === q.length) {
-        q.length = 0;
-        unitState._head = 0;
+    // ФАЗА 3: ТОТАЛЬНЫЙ ФИНАЛЬНЫЙ ПОДЖЕГ ЭКРАНА И ЗАПЕЧАТЫВАНИЕ КУЧИ КОРНЯ
+    if (intent === "LOAD_SEQUENCE_COMPLETED") {
+        // Жестко форсируем обновление кэша ключей шины СМО
+        _gpssEngineState.facilitiesKeysCached = Array.from(_gpssEngineState.facilitiesRegistry.keys());
+
+        // Фиксируем фокус на Командной строке (Слот 105)
+        kernel.model.logicalState.focusedSlotId = "105";
+        
+        if (kernel.virtualCanvasState) {
+            kernel.virtualCanvasState.isDirty = true;
+        }
+
+        // ВЫСТРЕЛИВАЕМ ИБ ПЕРЕД ЗАПЕЧАТЫВАНИЕМ: Включаем прерывания терминала
+        enterAlternativeHardwareBuffer();
+        listenHardwareInterrupts(kernel);
+
+        // ФИНАЛЬНОЕ СТРОГОЕ ДОД ЗАПЕЧАТЫВАНИЕ: Рантайм полностью стабилизирован!
+        Object.preventExtensions(kernel.model.logicalState.panelRegistry);
+        Object.preventExtensions(kernel.model.logicalState);
+        Object.preventExtensions(kernel.model);
+        Object.preventExtensions(kernel.virtualCanvasState.virtualMatrix);
+        Object.preventExtensions(kernel.virtualCanvasState);
+        Object.preventExtensions(kernel);
+        
+        // ВЫСТРЕЛИВАЕМ ПЕРВЫЙ КАНОНИЧЕСКИЙ КАДР НА ПОЛНОСТЬЮ СИНХРОННОЕ ОЗУ
+        generateGpssTransaction("1", "EXECUTE_RENDER", null);
+
+        if (typeof kernel.executeViewportBlit === "function") {
+            kernel.executeViewportBlit();
+        }
+        return true;
     }
 
-    unitState.isProcessing = false;
-    return hasMutations;
+    return false;
 }
 
 /** 
  * ПАСПОРТ ЛИСТИНГА:
  * Путь: src/core/smo/root_unit.js
- * Время модификации: 18.08.2026 16:58:30 MSK
+ * Время модификации: 22.08.2026 07:56:00 MSK
  */

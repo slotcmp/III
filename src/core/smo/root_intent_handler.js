@@ -1,7 +1,8 @@
 /**
  * @file src/core/smo/root_intent_handler.js
- * @version 3.0.2-RELEASE-SMO-ROOT-INTENT-HANDLER-DOD
+ * @version 3.0.3-RELEASE-SMO-ROOT-INTENT-HANDLER-DOD
  * @description Главный диспетчер прерываний и системных интентов Канала 0.
+ * ИСПРАВЛЕНЫ АЛЛОКАЦИИ И ГВАРДЫ: Обход переведен на facilitiesKeysCached с фильтрацией системных каналов.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
@@ -44,10 +45,19 @@ export function processSpecificRootLogic(r, actionStr, payloadObj, currentTx) {
                     isMutated = true;
 
                     if (typeof generateGpssTransaction === "function") {
-                        const allRegisteredKeys = Array.from(_gpssEngineState.facilitiesRegistry.keys());
-                        for (let i = 0; i < allRegisteredKeys.length; i++) {
-                            const slotId = allRegisteredKeys[i];
-                            if (slotId === "0" || slotId === "1" || slotId === "4" || slotId === "9") continue;
+                        // ИСПРАВЛЕНИЕ: Читаем готовый плоский кэш ключей вместо выделения Array.from()
+                        const activeFacilitiesKeys = _gpssEngineState.facilitiesKeysCached;
+                        const len = activeFacilitiesKeys.length;
+
+                        for (let i = 0; i < len; i++) {
+                            const slotId = activeFacilitiesKeys[i];
+                            
+                            // Строгий гвард: отсекаем весь служебный диапазон 0-99 по манифесту платформы
+                            const slotIdNum = parseInt(slotId, 10);
+                            if (isNaN(slotIdNum) || slotIdNum < 100) {
+                                continue;
+                            }
+                            
                             generateGpssTransaction(slotId, "UPDATE_THEME_MASK", null);
                         }
                     }
@@ -62,9 +72,3 @@ export function processSpecificRootLogic(r, actionStr, payloadObj, currentTx) {
 
     return isMutated;
 }
-
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/core/smo/root_intent_handler.js
- * Время modification: 18.08.2026 19:29:45 MSK
- */

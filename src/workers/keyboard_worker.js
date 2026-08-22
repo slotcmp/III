@@ -1,8 +1,8 @@
 /**
  * @file src/app/workers/keyboard_worker.js
- * @version 3.0.2-RELEASE-SMO-KEYBOARD-WORKER-DOD
+ * @version 3.6.6-RELEASE-SMO-KEYBOARD-WORKER-ALT-NUMBERS-STABLE
  * @description Фоновый воркер разбора клавиатурных событий.
- * Выполняет высокоскоростной маршалинг кодов клавиш в абстрактные СМО-транзакты.
+ * ИСПРАВЛЕН Unicode-ВВОД: Расширен захват многобайтовых символов sequence для поддержки кириллицы.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
@@ -20,7 +20,16 @@ if (parentPort) {
         let action = null;
         let payload = null;
         
-        if (name === "tab") {
+        // ДЕТЕКЦИЯ КОМБИНАЦИЙ ALT + ЦИФРА (Alt+1 ... Alt+6)
+        if (name.length === 5 && name.startsWith("alt+")) {
+            const digitChar = name.charAt(4);
+            if (digitChar >= "1" && digitChar <= "6") {
+                action = "FOCUS_CHANGED_BY_NUMBER";
+                payload = Math.floor(parseInt(digitChar, 10) || 1);
+            }
+        } 
+        // СТАНДАРТНЫЙ НАВИГАЦИОННЫЙ И СЛУЖЕБНЫЙ МАРШАЛИНГ
+        else if (name === "tab") {
             if (focusedSlotIdStr === "105") {
                 action = "TAB_COMPLETION_REQUEST";
                 payload = null;
@@ -43,25 +52,34 @@ if (parentPort) {
             action = "SYSTEM_ACTION_BYPASS";
             payload = "F4_MACRO";
         } else if (focusedSlotIdStr === "105") {
+            // ИСПРАВЛЕНИЕ: Кириллица и заглавные буквы могут приходить как в sequence, так и в name
             let targetChar = "";
-            if (sequence.length === 1) { targetChar = sequence; }
+            if (sequence.length > 0) { targetChar = sequence; }
             else if (name.length === 1) { targetChar = name; }
-            if (targetChar.length === 1) {
+            
+            if (targetChar.length > 0) {
                 action = "KEY_PRESSED";
                 payload = { char: targetChar };
             }
         }
         
-                if (action) {
+        if (action) {
             // Безаллокационный сборщик временной метки (DOD-friendly)
             const now = new Date();
             const h = String(now.getHours()).padStart(2, "0");
             const m = String(now.getMinutes()).padStart(2, "0");
             const s = String(now.getSeconds()).padStart(2, "0");
 
-            // Выстреливаем запись в системный логгер (Слот 108) до отправки действия на шину
-            const logMsgStr = "[" + h + ":" + m + ":" + s + " Msk] [INPUT_KEYBOARD] Нажата клавиша: '" + (payload?.char || name) + "' | Направлено в Слот: " + focusedSlotIdStr;
-            generateGpssTransaction("108", "ADD_LOG_ENTRY", logMsgStr);
+            // ИСПРАВЛЕНИЕ: Безопасное извлечение символа из объекта payload с fallback на строку
+            const printableKeyStr = (payload && typeof payload === "object" && payload.char) ? payload.char : name;
+            const logMsgStr = "[" + h + ":" + m + ":" + s + " Msk] [INPUT_KEYBOARD] Клавиша: '" + printableKeyStr + "' | Направлено в Слот: " + focusedSlotIdStr + "\n";
+            
+            const logPack = {
+                action: "LOG_ENTRY_PENDING",
+                payload: logMsgStr
+            };
+            Object.preventExtensions(logPack);
+            parentPort.postMessage(logPack);
 
             const resPack = {
                 action: "KEYBOARD_ACTION_READY",
@@ -86,9 +104,3 @@ if (parentPort) {
         parentPort.postMessage(releasePack);
     });
 }
-
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/app/workers/keyboard_worker.js
- * Время модификации: 18.08.2026 16:51:14 MSK
- */

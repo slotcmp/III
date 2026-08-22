@@ -1,8 +1,8 @@
 /**
  * @file src/modules/theme/theme_view.js
- * @version 3.0.0-RELEASE-DOD-FORK
+ * @version 3.0.1-RELEASE-DOD-FORK
  * @description Пассивное TUI-представление Панели Тем (Presentation-контур).
- * Синхронно заполняет локальную матрицу строками доступных цветовых палитр ядра СМО.
+ * ИСПРАВЛЕНЫ ИНДЕКСЫ: Ограничен диапазон вывода для защиты нижних рамок от затирания контентом.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
@@ -50,7 +50,7 @@ export function renderThemeContent(view, mdl) {
     const currentW = Math.max(1, Math.floor(view.width || 36));
     const currentH = Math.max(1, Math.floor(view.height || 16));
 
-    // Очищаем рабочую область контента внутри двойных рам
+    // Очищаем рабочую область контента строго внутри двойных рам
     for (let y = 1; y < currentH - 1; y++) {
         const row = m[y];
         if (!row) continue;
@@ -63,11 +63,15 @@ export function renderThemeContent(view, mdl) {
 
     const list = mdl.themesList || [];
     const len = list.length;
-    const maxVisibleRows = Math.min(len, currentH - 2);
+    
+    // ИСПРАВЛЕНИЕ: maxVisibleRows жестко ограничена (currentH - 3), чтобы targetRowY не наступал на h - 1
+    const maxVisibleRows = Math.min(len, currentH - 3);
 
     for (let i = 0; i < maxVisibleRows; i++) {
         const themeItem = list[i];
-        const targetRowY = 2 + i; 
+        
+        // Начало отрисовки контента с Y = 1 (первая строка внутри рамки)
+        const targetRowY = 1 + i; 
         const row = m[targetRowY];
 
         if (row && themeItem) {
@@ -78,9 +82,3 @@ export function renderThemeContent(view, mdl) {
         }
     }
 }
-
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/modules/theme/theme_view.js
- * Время модификации: 18.08.2026 18:12:45 MSK
- */

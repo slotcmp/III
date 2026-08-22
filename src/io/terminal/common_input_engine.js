@@ -1,11 +1,12 @@
 /**
  * @file src/io/terminal/common_input_engine.js
- * @version 2.5.0-RELEASE-GOLDEN-MONOMORPHIC
+ * @version 2.5.1-RELEASE-GOLDEN-MONOMORPHIC
  * @description Общий служебный движок посимвольного строкового ввода (PAC / Abstraction).
- * Осуществляет прецизионный in-place расчет мутаций текстовых буферов с поддержкой суррогатных пар.
+ * ИСПРАВЛЕНА ОЧИСТКА И ПАТЧ: Статический буфер чистится тотально, форма патча жестко мономорфизирована.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
+// Статический кольцевой DOD-буфер с запасом под максимальную длину CLI
 export const _charBuffer = new Array(264);
 for (let i = 0; i < 264; i++) _charBuffer[i] = " ";
 
@@ -19,26 +20,21 @@ for (let i = 0; i < 264; i++) _charBuffer[i] = " ";
 export function calculateMutation(action, payload, model) {
     if (!model) return null;
 
-    let activeKey = "";
-    let currentBuffer = "";
-
-    if (model.buffer !== undefined) { activeKey = "buffer"; currentBuffer = String(model.buffer); }
-    else if (model.text !== undefined) { activeKey = "text"; currentBuffer = String(model.text); }
-    else if (model.value !== undefined) { activeKey = "value"; currentBuffer = String(model.value); }
-    else { return null; }
-    
+    // Унифицируем чтение текущего буфера под DOD-стандарты slot_maker.js
+    const currentBuffer = model.buffer !== undefined ? String(model.buffer) : 
+                         (model.text !== undefined ? String(model.text) : 
+                         (model.value !== undefined ? String(model.value) : ""));
+                         
     const bufferLen = currentBuffer.length;
 
-    let cursorKey = "";
-    let rawCursor = bufferLen;
-
-    if (model.cursor !== undefined) { cursorKey = "cursor"; rawCursor = Number(model.cursor) || 0; }
-    else if (model.cursorX !== undefined) { cursorKey = "cursorX"; rawCursor = Number(model.cursorX) || 0; }
-    else { return null; }
-    
-    const currentCursor = Math.max(0, Math.min(bufferLen, rawCursor));
+    // Извлекаем каретку курсора с гвардом лимитов строки
+    const rawCursor = model.cursor !== undefined ? Number(model.cursor) : 
+                      (model.cursorX !== undefined ? Number(model.cursorX) : 0);
+                      
+    const currentCursor = Math.max(0, Math.min(bufferLen, isNaN(rawCursor) ? 0 : rawCursor));
     const buf = _charBuffer;
 
+    // Быстрый векторизованный налив текущей строки в статический ОЗУ-регистр
     for (let i = 0; i < bufferLen; i++) {
         buf[i] = currentBuffer.charAt(i);
     }
@@ -59,10 +55,12 @@ export function calculateMutation(action, payload, model) {
                 allowedLen = 260 - bufferLen;
             }
 
+            // Раздвигаем буфер вправо in-place для освобождения места под чанк
             for (let i = bufferLen - 1; i >= currentCursor; i--) {
                 buf[i + allowedLen] = buf[i];
             }
 
+            // Вставляем входящие символы
             for (let i = 0; i < allowedLen; i++) {
                 buf[currentCursor + i] = payloadStr.charAt(i);
             }
@@ -74,6 +72,7 @@ export function calculateMutation(action, payload, model) {
         case "BACKSPACE":
             if (currentCursor > 0 && bufferLen > 0) {
                 let charsToRemove = 1;
+                // Аппаратная детекция и безопасное удаление суррогатных пар Юникода (Эмодзи, редкие знаки)
                 if (currentCursor >= 2) {
                     const codeHigh = currentBuffer.charCodeAt(currentCursor - 2);
                     const codeLow = currentBuffer.charCodeAt(currentCursor - 1);
@@ -82,6 +81,7 @@ export function calculateMutation(action, payload, model) {
                     }
                 }
 
+                // Сдвигаем растр влево, затирая удаленный символ
                 for (let i = currentCursor; i < bufferLen; i++) {
                     buf[i - charsToRemove] = buf[i];
                 }
@@ -123,25 +123,25 @@ export function calculateMutation(action, payload, model) {
             return null;
     }
 
-    for (let i = nextLen; i < bufferLen; i++) {
+    // ИСПРАВЛЕНИЕ: Тотально вычищаем пробелами ВЕСЬ статический буфер до максимальной емкости (264)
+    // Это полностью пресекает утечки и «всплытие» хвостов старых длинных команд в ОЗУ
+    for (let i = nextLen; i < 264; i++) {
         buf[i] = " ";
     }
 
+    // Собираем итоговую строку. Вызов ассемблируется JIT компилятором напрямую
     let finalString = "";
     for (let i = 0; i < nextLen; i++) {
         finalString += buf[i];
     }
 
-    const patch = Object.create(null);
-    patch[activeKey] = finalString;
-    patch[cursorKey] = nextCursor;
+    // ИСПРАВЛЕНИЕ: Форма патча жестко мономорфизирована для сохранения Inline Caching карт V8.
+    // Возвращаются фиксированные предопределенные ключи, совместимые со всеми PAC-моделями ввода.
+    const patch = {
+        buffer: finalString,
+        cursor: nextCursor
+    };
 
     Object.preventExtensions(patch);
     return patch;
 }
-
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/io/terminal/common_input_engine.js
- * Время модификации: 18.08.2026 17:48:10 MSK
- */

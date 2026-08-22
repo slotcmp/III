@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file src/io/terminal/blit.js
  * @version 3.0.1-RELEASE-SMO-VIEWPORT-BLIT-PASSTHROUGH
  * @description Чистая пассивная процедура выжигания экранных буферов (Control/Presentation).
@@ -16,18 +16,20 @@ import { flushVirtualCanvasToTty } from "./flusher.js";
  * @param {Object} geoMap Актуальная рассчитанная карта геометрии ОЗУ
  * @returns {boolean} Флаг успешности отправки кадра
  */
+/**
+ * Извлекает и синхронизирует итоговую TUI-матрицу для отправки в физический дескриптор терминала
+ */
 export function executeViewportBlit(virtualCanvasState, host, geoMap) {
     if (!virtualCanvasState || !host || !geoMap) return false;
 
     const rootDisplayNode = synchronizeDisplayTree(virtualCanvasState, host, geoMap);
     if (!rootDisplayNode || !rootDisplayNode.matrix) return false;
 
-    const maxRows = Math.floor(rootDisplayNode.h || 30);
-    const maxCols = Math.floor(rootDisplayNode.w || 120);
-
-    flushVirtualCanvasToTty(virtualCanvasState, rootDisplayNode.matrix, maxRows, maxCols);
+    // ИСПРАВЛЕНО: передаем рантайм ядра хоста и карту геометрии вместо сырых габаритов
+    flushVirtualCanvasToTty(virtualCanvasState, host, geoMap);
     return true;
 }
+
 
 /** 
  * ПАСПОРТ ЛИСТИНГА:

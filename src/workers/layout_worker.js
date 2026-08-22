@@ -1,8 +1,8 @@
 /**
  * @file src/workers/layout_worker.js
- * @version 3.0.5-RELEASE-SMO-LAYOUT-WORKER-FIXED
+ * @version 3.1.0-RELEASE-SMO-LAYOUT-WORKER-PURE-DOD
  * @description Фоновый изолят асинхронного расчета 3-проходной флекс-разметки (VFS / Layout).
- * Исправлен баг: габариты ConPTY считываются строго из параметров IPC-задачи, а не из process.stdout.
+ * УНИФИКАЦИЯ: Габариты считываются строго из параметров IPC-задачи, ОЗУ-зеркало зачищается in-place.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
@@ -20,13 +20,14 @@ if (parentPort) {
 
         const topologyTree = taskPack.layoutTree;
         
-        // ПРЕЦИЗИОННОЕ ИСПРАВЛЕНИЕ: Берем честные изменяющиеся координаты из пакета СМО
+        // Прецизионно вытягиваем динамические координаты из входящего СМО-пакета
         const currentW = Math.max(40, Math.floor(taskPack.width || 120));
         const currentH = Math.max(10, Math.floor(taskPack.height || 30));
 
         // Очищаем локальное ОЗУ-зеркало перед новым проходом калькулятора
         const keys = Object.keys(_localThreadGeometryRegistry);
-        for (let i = 0; i < keys.length; i++) {
+        const lenKeys = keys.length;
+        for (let i = 0; i < lenKeys; i++) {
             delete _localThreadGeometryRegistry[keys[i]];
         }
 
@@ -44,11 +45,12 @@ if (parentPort) {
 
         // Запечатываем элементы перед отправкой через межпоточный мост Windows
         const calculatedKeys = Object.keys(_localThreadGeometryRegistry);
-        for (let i = 0; i < calculatedKeys.length; i++) {
+        const lenCalc = calculatedKeys.length;
+        for (let i = 0; i < lenCalc; i++) {
             Object.preventExtensions(_localThreadGeometryRegistry[calculatedKeys[i]]);
         }
 
-        // Возвращаем СМО-транзакт Фазы Б в главное ядро хоста
+        // Возвращаем СМО-транзакт Фазы Б в главное ядро хоста через IPC-мост
         parentPort.postMessage({
             type: "GEO_MAP_COMPUTED",
             geoMap: _localThreadGeometryRegistry,
@@ -60,5 +62,5 @@ if (parentPort) {
 /** 
  * ПАСПОРТ ЛИСТИНГА:
  * Путь: src/workers/layout_worker.js
- * Время модификации: 18.08.2026 23:44:05 MSK
+ * Время модификации: 21.08.2026 16:34:05 MSK
  */

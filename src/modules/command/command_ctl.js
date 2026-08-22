@@ -1,136 +1,111 @@
 /**
  * @file src/modules/command/command_ctl.js
- * @version 3.0.1-RELEASE-SMO-COMMAND-CONTROLLER-SYNCHRONOUS
+ * @version 3.4.1-RELEASE-SMO-COMMAND-CTL-STERILE
  * @description Контроллер и фазовый фильтр СМО-прибора обслуживания Канала 105 (Command Line).
- * Синхронно разбирает CLI-команды ввода и маршрутизирует транзакты без try/catch.
+ * ИСПРАВЛЕНА РЕАКТИВНОСТЬ: Выполнение команд переведено на генерацию транзактов прерывания шины СМО.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
-import { createCommandMdlInstance } from "./command_mdl.js";
-import { createCommandViewInstance, renderCommandContent } from "./command_view.js";
-import { calculateMutation } from "../../io/terminal/common_input_engine.js";
 import { generateGpssTransaction } from "../../core/smo/bus.js";
-import fs from "node:fs";
+import { calculateMutation } from "../../io/terminal/common_input_engine.js";
 
 /**
- * Фабрика сборки мономорфного состояния PAC-контроллера командной панели
- * @param {Object} appHostRef Ссылка на ядро хоста приложения
- * @param {string} slotIdStr Идентификатор целевого слота
- * @returns {Object} Запечатанная структура контроллера
+ * Старая фабрика сборки контроллера сохранена для совместимости автоскана V8, 
+ * но рантайм GEN III использует ленивый монтаж через IoC-монтажник slot_maker.js.
  */
 export function createCommandController(appHostRef, slotIdStr) {
     const id = String(slotIdStr || "105");
-    const ctlState = { mdl: createCommandMdlInstance(), view: createCommandViewInstance(id), host: appHostRef, slotId: id };
+    const ctlState = { mdl: null, view: null, host: appHostRef, slotId: id };
     Object.preventExtensions(ctlState);
     return ctlState;
 }
 
 /**
- * Фазовый СМО-фильтр супершины прерываний для Прибора Канала 105
- * @param {Object} facilityState Состояние активного прибора СМО
- * @param {string} intentStr Идентификатор прерывания
- * @param {Object} contextPayload Контекст транзакта
- * @param {Object} currentTx Полный паспорт транзакта СМО
- * @returns {boolean} Флаг наличия мутаций
+ * Чистая процедура редукции прерываний Слота 105
  */
 export function processSpecificCommandLogic(facilityState, intentStr, contextPayload, currentTx) {
     const pack = facilityState.viewStack;
     if (!pack || !pack.mdl || !pack.view) return false;
     
-    const mdl = pack.mdl;
-    const view = pack.view;
+    const m = pack.mdl; 
+    const v = pack.view;
     const intent = String(intentStr || "");
     let isMutated = false;
 
-    // СМО-ФАЗА ОТРЕСОВКИ: Полностью СИНХРОННЫЙ вызов отрисовщика из статического импорта
-    if (intent === "SMO_PHASE_CONTENT") {
-        renderCommandContent(view, mdl);
-        return true;
+    // Синхронизируем флаг фокуса отображения с глобальным фокусом ядра хоста
+    if (facilityState.host?.model?.logicalState) {
+        const currentFocusedId = String(facilityState.host.model.logicalState.focusedSlotId || "");
+        v._isFocused = (currentFocusedId === "105");
     }
-
-    const maxBufferLen = 256;
 
     switch (intent) {
         case "KEY_PRESSED":
             if (contextPayload && contextPayload.char) {
-                const patch = calculateMutation("TYPE_CHAR", contextPayload.char, mdl);
+                const patch = calculateMutation("TYPE_CHAR", contextPayload.char, m);
                 if (patch) {
-                    mdl.buffer = String(patch.buffer);
-                    mdl.cursor = Math.floor(patch.cursor);
-                    mdl.textLength = mdl.buffer.length; 
-                    mdl.cursorX = mdl.cursor;
+                    m.buffer = String(patch.buffer);
+                    m.cursor = Math.max(0, Math.floor(patch.cursor || 0));
                     
-                    const charCount = mdl.buffer.length;
+                    const charCount = Math.min(m.buffer.length, 256);
+                    m.textLength = charCount;
+                    m.cursorX = m.cursor;
+                    
                     for (let i = 0; i < charCount; i++) {
-                        mdl.charBuffer[i] = mdl.buffer.charAt(i);
+                        m.charBuffer[i] = m.buffer.charAt(i);
                     }
-                    mdl._isDirty = true; 
+                    
+                    m._isDirty = true;
                     isMutated = true;
                 }
             }
             break;
 
         case "BACKSPACE_PRESSED":
-            const patchBs = calculateMutation("BACKSPACE", null, mdl);
-            if (patchBs) {
-                mdl.buffer = String(patchBs.buffer);
-                mdl.cursor = Math.floor(patchBs.cursor);
-                mdl.textLength = mdl.buffer.length; 
-                mdl.cursorX = mdl.cursor;
-                mdl.charBuffer[mdl.buffer.length] = " ";
+            // Реализация удаления символов через общий input-движок
+            const bsPatch = calculateMutation("BACKSPACE", null, m);
+            if (bsPatch) {
+                m.buffer = String(bsPatch.buffer);
+                m.cursor = Math.max(0, Math.floor(bsPatch.cursor || 0));
                 
-                const charCountBs = mdl.buffer.length;
-                for (let i = 0; i < charCountBs; i++) {
-                    mdl.charBuffer[i] = mdl.buffer.charAt(i);
+                const charCount = Math.min(m.buffer.length, 256);
+                m.textLength = charCount;
+                m.cursorX = m.cursor;
+                
+                for (let i = 0; i < 256; i++) {
+                    m.charBuffer[i] = i < charCount ? m.buffer.charAt(i) : " ";
                 }
-                mdl._isDirty = true; 
+                
+                m._isDirty = true;
                 isMutated = true;
             }
             break;
 
-        case "ENTER_PRESSED":
-            const rawCmd = mdl.buffer.trim();
-            if (rawCmd.length > 0) {
-                const spaceIdx = rawCmd.indexOf(" ");
-                const cmdToken = (spaceIdx !== -1) ? rawCmd.substring(0, spaceIdx).toLowerCase() : rawCmd.toLowerCase();
-                const argToken = (spaceIdx !== -1) ? rawCmd.substring(spaceIdx + 1).trim() : "";
-
-                if (cmdToken === "clear") {
-                    generateGpssTransaction("108", "ADD_LOG_ENTRY", "[CLI_SHELL] Буфер консоли очищен");
-                } else if (cmdToken === "mkdir" && argToken.length > 0) {
-                    // Превентивный гвард заменяет try/catch для защиты от сбоев ФС
-                    if (!fs.existsSync(argToken)) {
-                        fs.mkdirSync(argToken, { recursive: true });
-                        generateGpssTransaction("108", "ADD_LOG_ENTRY", "[CLI_SHELL] Создана директория: " + argToken);
-                    } else {
-                        generateGpssTransaction("108", "ADD_LOG_ENTRY", "[CLI_SHELL] Ошибка mkdir: Директория уже существует");
-                    }
-                } else if (cmdToken === "cd" && argToken.length > 0) {
-                    if (facilityState.host?.workerGateway?.triggerDirectoryIndexing) {
-                        facilityState.host.workerGateway.triggerDirectoryIndexing("102", argToken, 0);
-                        generateGpssTransaction("108", "ADD_LOG_ENTRY", "[CLI_SHELL] Переход в директорию: " + argToken);
-                    }
-                } else {
-                    generateGpssTransaction("108", "ADD_LOG_ENTRY", "[CLI_SHELL] Неизвестная команда: " + cmdToken);
-                }
-
-                mdl.buffer = ""; 
-                mdl.cursor = 0; 
-                mdl.textLength = 0; 
-                mdl.cursorX = 0;
-                for (let i = 0; i < maxBufferLen; i++) {
-                    mdl.charBuffer[i] = " ";
-                }
-                mdl._isDirty = true; 
+        case "EXECUTE_COMMAND":
+            if (m.buffer && m.buffer.length > 0) {
+                const commandStr = String(m.buffer).trim();
+                
+                // ИСПРАВЛЕНИЕ: Вместо мертвого пассивного флага выстреливаем реактивный транзакт на Канал 0!
+                // Это мгновенно будит ядро и передает команду на исполнение в системный контур.
+                generateGpssTransaction("0", "SYSTEM_COMMAND_EXECUTE", {
+                    rawCommand: commandStr
+                });
+                
+                // Атомарно очищаем ОЗУ-регистры строки ввода
+                m.buffer = "";
+                m.cursor = 0;
+                m.textLength = 0;
+                m.cursorX = 0;
+                for (let k = 0; k < 256; k++) m.charBuffer[k] = " ";
+                
+                m._isDirty = true;
                 isMutated = true;
             }
+            break;
+
+        case "UPDATE_THEME_MASK":
+            m._isDirty = true;
+            isMutated = true;
             break;
     }
     return isMutated;
 }
-
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/modules/command/command_controller.js
- * Время модификации: 18.08.2026 17:15:30 MSK
- */

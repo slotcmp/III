@@ -1,8 +1,8 @@
 /**
  * @file src/modules/explorer/explorer_mdl.js
- * @version 3.0.0-RELEASE-DOD-FORK
+ * @version 3.0.1-RELEASE-SMO-EXPLORER-MODEL-MONOMORPHIC
  * @description Анемичная модель данных Проводника (PAC / Abstraction-контур).
- * Реализует запечатанные мономорфные структуры кэша VFS-элементов дискового пространства.
+ * ИСПРАВЛЕНА АДРЕСАЦИЯ: Имя регистра пути синхронизировано с системной фабрикой slot_maker.js.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
@@ -12,14 +12,15 @@
  */
 export function createExplorerMdlInstance() {
     const mdlState = {
-        currentPath: "C:\\\\",
+        // ИСПРАВЛЕНИЕ: Переименовано в currentDirectoryPath для соответствия с slot_maker.js и explorer_ctl.js
+        currentDirectoryPath: "C:/",
         
-        // Fast Packed Elements массив кэша файлов диска
+        // Fast Packed Elements массив канонического кэша файлов диска
         itemsList: [
             { name: "..", isDir: true, size: 0, ext: "" },
             { name: "src", isDir: true, size: 0, ext: "" },
             { name: "config", isDir: true, size: 0, ext: "" },
-            { name: "index.js", isDir: false, size: 4096, ext: "js" }
+            { name: "index.js", isDir: false, size: 4096, ext: ".js" } // Приведено к единому формату расширений
         ], 
         
         selectedIndex: 0,
@@ -45,12 +46,6 @@ export function createExplorerMdlInstance() {
  */
 export function updateCurrentPath(mdlState, newPathStr, kernelRef) {
     if (!mdlState) return;
-    mdlState.currentPath = String(newPathStr || "C:\\\\");
+    mdlState.currentDirectoryPath = String(newPathStr || "C:/");
     mdlState._isDirty = true;
 }
-
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/modules/explorer/explorer_mdl.js
- * Время модификации: 18.08.2026 18:23:45 MSK
- */

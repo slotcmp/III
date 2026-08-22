@@ -1,105 +1,70 @@
 /**
- * @file src/modules/theme/theme_controller.js
- * @version 3.0.1-RELEASE-SMO-THEME-CONTROLLER-SYNCHRONOUS
- * @description Контроллер и фазовый фильтр СМО-прибора обслуживания Канала 106 (Theme).
- * Управляет селектором цветовых схем TUI-матрицы ядра без разрыва такта Event Loop.
+ * @file src/modules/theme/theme_ctl.js
+ * @version 3.1.1-RELEASE-SMO-THEME-CTL-STERILE
+ * @description Контроллер и фазовый фильтр СМО-прибора обслуживания Канала 106 (Theme Selector).
+ * ИСПРАВЛЕНА АДРЕСАЦИЯ: Имена регистров синхронизированы со статической DOD-фабрикой slot_maker.js.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
-import { createThemeMdlInstance } from "./theme_mdl.js";
-import { createThemeViewInstance, renderThemeContent } from "./theme_view.js";
+import { generateGpssTransaction } from "../../core/smo/bus.js";
 
 /**
- * Фабрика сборки мономорфного состояния PAC-контроллера тем оформления
- * @param {Object} appHostRef Ссылка на ядро хоста приложения
- * @param {string} slotIdStr Идентификатор целевого слота
- * @returns {Object} Запечатанная структура контроллера
+ * Старая фабрика сборки контроллера сохранена для совместимости автоскана V8, 
+ * но рантайм GEN III использует ленивый монтаж через slot_maker.js.
  */
 export function createThemeController(appHostRef, slotIdStr) {
     const id = String(slotIdStr || "106");
-    const ctlState = { mdl: createThemeMdlInstance(), view: createThemeViewInstance(id), host: appHostRef, slotId: id };
+    const ctlState = { mdl: null, view: null, host: appHostRef, slotId: id };
     Object.preventExtensions(ctlState);
     return ctlState;
 }
 
 /**
- * Фазовый СМО-фильтр супершины прерываний для Прибора Канала 106
- * @param {Object} facilityState Состояние активного прибора СМО
- * @param {string} intentStr Идентификатор прерывания
- * @param {Object} contextPayload Контекст транзакта
- * @param {Object} currentTx Полный паспорт транзакта СМО
- * @returns {boolean} Флаг наличия мутаций
+ * Чистая процедура редукции прерываний Слота 106
  */
 export function processSpecificThemeLogic(facilityState, intentStr, contextPayload, currentTx) {
     const pack = facilityState.viewStack;
     if (!pack || !pack.mdl || !pack.view) return false;
     
-    const mdl = pack.mdl; 
-    const view = pack.view;
+    const m = pack.mdl; 
     const intent = String(intentStr || "");
     let isMutated = false;
 
-    // СМО-ФАЗА ОТРЕСОВКИ: Полностью СИНХРОННЫЙ вызов отрисовщика из статического импорта
-    if (intent === "SMO_PHASE_CONTENT") {
-        renderThemeContent(view, mdl);
-        return true;
-    }
-
+    // Ветвление по кодам системных и прикладных интентов
     switch (intent) {
         case "MOVE_CURSOR_DOWN":
-            if (mdl.selectedIndex < mdl.themesList.length - 1) {
-                mdl.selectedIndex++; 
-                mdl._isDirty = true; 
-                isMutated = true;
-                _notifyKernelAboutThemeChange(facilityState, mdl);
-            }
-            break;
-            
-        case "MOVE_CURSOR_UP":
-            if (mdl.selectedIndex > 0) {
-                mdl.selectedIndex--; 
-                mdl._isDirty = true; 
-                isMutated = true;
-                _notifyKernelAboutThemeChange(facilityState, mdl);
-            }
-            break;
-            
-        case "MOUSE_CLICK":
-            if (contextPayload && contextPayload.localY !== undefined) {
-                const targetIdx = Math.floor(contextPayload.localY) - 2;
-                if (targetIdx >= 0 && targetIdx < mdl.themesList.length) {
-                    mdl.selectedIndex = targetIdx; 
-                    mdl._isDirty = true; 
-                    isMutated = true;
-                    _notifyKernelAboutThemeChange(facilityState, mdl);
+        case "SELECT_NEXT_THEME":
+            // ИСПРАВЛЕНИЕ: Читаем мономорфный регистр themesList, задекларированный в slot_maker.js
+            if (m.themesList && m.themesList.length > 0) {
+                // Извлекаем текущий индекс селектора из регистра модели
+                const currentIdx = Math.max(0, Math.floor(m.selectedIndex || 0));
+                const totalThemesNum = Math.floor(m.totalThemes || m.themesList.length);
+                
+                // Сдвигаем каретку выбора по кольцевому буферу
+                const nextIdx = (currentIdx + 1) % totalThemesNum;
+                m.selectedIndex = nextIdx;
+                
+                const targetThemeObj = m.themesList[nextIdx];
+                if (targetThemeObj && facilityState.host) {
+                    const nextColorMaskStr = String(targetThemeObj.borderColorMsk || "gray");
+                    
+                    // Бросаем транзакцию прерывания ядра на смену глобальной палитры рамок
+                    generateGpssTransaction("0", "GLOBAL_THEME_CHANGED", { 
+                        colorMask: nextColorMaskStr 
+                    });
                 }
+                
+                m._isDirty = true;
+                isMutated = true;
             }
             break;
             
-        case "ROTATE_SLOT_STACK":
-            mdl.selectedIndex = (mdl.selectedIndex + 1) % mdl.themesList.length;
-            mdl._isDirty = true; 
+        case "UPDATE_THEME_MASK":
+            // Прерывание от Канала 0 при изменении глобальной палитры
+            m._isDirty = true;
             isMutated = true;
-            _notifyKernelAboutThemeChange(facilityState, mdl);
             break;
     }
+    
     return isMutated;
 }
-
-/**
- * Внутреннее уведомление верховного прибора 0 об аппаратной смене ANSI-маски границ
- */
-function _notifyKernelAboutThemeChange(facilityState, mdl) {
-    const host = facilityState.host;
-    if (!host || typeof host.dispatch !== "function") return;
-    const selectedTheme = mdl.themesList[mdl.selectedIndex];
-    if (selectedTheme) {
-        host.dispatch("0", "GLOBAL_THEME_CHANGED", { colorMask: selectedTheme.borderColorMsk });
-    }
-}
-
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/modules/theme/theme_controller.js
- * Время модификации: 18.08.2026 17:05:40 MSK
- */

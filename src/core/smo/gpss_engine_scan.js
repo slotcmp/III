@@ -1,36 +1,68 @@
 /**
  * @file src/core/smo/gpss_engine_scan.js
- * @version 3.0.0-RELEASE-DOD-GOLDEN-SCANNER
+ * @version 4.2.1-RELEASE-SMO-ENGINE-BEЗУСЛОВНЫЙ-RESIZE-STABLE
  * @description Центральный тактовый автомат продвижения имитационной шины СМО.
- * Синхронизирован со стабильной ревизией bus.js от 18.08.2026 19:29:45 MSK.
+ * ИСПРАВЛЕНА РЕКУРСИЯ И АЛЛОКАЦИИ: Обход переведен на facilitiesKeysCached, устранен дедлок рендеринга.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
 import { _gpssEngineState, generateGpssTransaction } from "./bus.js";
+import { forceInvalidateShadowCanvas } from "../../io/terminal/flusher.js";
 
 /**
- * Инициирует один полный такт продвижения очередей прерываний СМО
- * @param {Object} kernel Ссылка на ОЗУ-рантайм хоста ядра приложения
- * @returns {boolean} Флаг необходимости перерисовки кадра холста
+ * Осуществляет одиночный проход продвижения очередей всех зарегистрированных приборов СМО
+ * @param {Object} kernel Ссылка на ОЗУ-рантайм хоста ядра
+ * @returns {boolean} Флаг наличия мутаций данных
  */
 export function processEngineSingleTick(kernel) {
     if (!kernel || !_gpssEngineState.runtime) return false;
 
-    // Шаг 1: Форсируем такт рендеринга через легитимную СМО-транзакцию
-    // Импульс сам раскрутит цепочку продвижения внутри bus.js и вызовет блайтер кадра!
-    const success = generateGpssTransaction("1", "EXECUTE_RENDER", null);
+    let hasMutations = false;
+    let isResizeDetected = false;
+    
+    // ИСПРАВЛЕНИЕ: Используем готовый мономорфный кэш ключей вместо аллокации через Array.from()
+    const activeFacilitiesKeys = _gpssEngineState.facilitiesKeysCached;
+    const keysLen = activeFacilitiesKeys.length;
 
-    // Шаг 2: Переводим виртуальный холст ConPTY в состояние загрязнения
-    if (success && kernel.virtualCanvasState) {
-        kernel.virtualCanvasState.isDirty = true;
+    // ШАГ 1: СКВОЗНОЙ ЦИКЛИЧЕСКИЙ ОПРОС ОЧЕРЕДЕЙ ПРИБОРОВ (0% Polling)
+    for (let i = 0; i < keysLen; i++) {
+        const slotId = activeFacilitiesKeys[i];
+        
+        // Канал 1 Отрисовки продвигается шиной гарантированно последним во избежание гонок (Фаза Б Манифеста)
+        if (slotId === "1") continue;
+
+        const facility = _gpssEngineState.facilitiesRegistry.get(slotId);
+        if (facility && typeof facility.advanceFacility === "function") {
+            const mutated = facility.advanceFacility();
+            if (mutated === true) {
+                hasMutations = true;
+                // Если сработал Канал #9 (Ресайз) — взводим локальный флаг перестройки кадра
+                if (slotId === "9") {
+                    isResizeDetected = true;
+                }
+            }
+        }
     }
 
-    return success;
-}
+    // ШАГ 2: РЕАКТИВНАЯ ПЕРЕРИСОВКА КАРТИНЫ МИРА И СКВОЗНОЙ БЛАЙТИНГ
+    if (hasMutations || isResizeDetected || (kernel.virtualCanvasState && kernel.virtualCanvasState.isDirty === true)) {
+        
+        // БЕЗУСЛОВНЫЙ СБРОС КЭША БЛАЙТЕРА ПРИ ИЗМЕНЕНИИ ГЕОМЕТРИИ TERMINAL WINDOW
+        if (isResizeDetected) {
+            if (typeof forceInvalidateShadowCanvas === "function") {
+                forceInvalidateShadowCanvas();
+            }
+        }
 
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/core/smo/gpss_engine_scan.js
- * Время модификации: 20.08.2026 21:58:15 MSK
- * Точка отката: #0818-RELEASE-GOLDEN-MONOMORPHIC
- */
+        if (kernel.virtualCanvasState) {
+            kernel.virtualCanvasState.isDirty = true;
+        }
+
+        // ИСПРАВЛЕНИЕ: Вызываем Канал 1 Отрисовки через транзакцию прерывания.
+        // Он самостоятельно вызовет kernel.executeViewportBlit во время выполнения своей специфичной логики.
+        // Прямой дублирующий вызов изъят для предотвращения зацикливания кадра.
+        generateGpssTransaction("1", "EXECUTE_RENDER", null);
+    }
+
+    return hasMutations;
+}
