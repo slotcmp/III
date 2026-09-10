@@ -1,41 +1,25 @@
 /**
  * @file src/modules/theme/theme_mdl.js
- * @version 3.0.0-RELEASE-DOD-FORK
- * @description Мономорфная модель Панели Тем (PAC / Abstraction-контур).
- * Хранит плоский массив эталонных цветовых масок для TUI-интерфейса.
+ * @version 3.1.1-RELEASE-SMO-THEME-MODEL-JSON-COMPLIANT
+ * @description Мономорфная анемичная модель Панели Тем. Изъяты GC-литералы для соблюдения парадигмы Zero Allocation.
+ * ИСПРАВЛЕНА СТАТИЧЕСКАЯ АЛЛОКАЦИЯ: Массив очищен, гидратация полностью делегирована ядру хоста.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
-/**
- * Фабрика аллокации запечатанного мономорфного состояния модели тем оформления
- * @returns {Object} Запечатанный объект состояния модели
- */
 export function createThemeMdlInstance() {
     const mdlState = {
-        _isDirty: false,
-        themesList: [
-            { id: 0, name: "1. CLASSIC STEEL", borderColorMsk: "gray" },
-            { id: 1, name: "2. COBALT OCEAN",  borderColorMsk: "blue" },
-            { id: 2, name: "3. AMETHYST NEON", borderColorMsk: "purple" },
-            { id: 3, name: "4. MATRIX OLIVE",  borderColorMsk: "olive" },
-            { id: 4, name: "5. DEEP CRIMSON",  borderColorMsk: "maroon" },
-            { id: 5, name: "6. MIDNIGHT NAVY", borderColorMsk: "navy" }
-        ],
-        totalThemes: 6,
-        selectedIndex: 0
+        _isDirty: true,
+        // Плоские регистры инициализируются пустыми для последующего O(1) инлейн-налива из VFS/JSON
+        themesList: [],
+        totalThemes: 0,
+        selectedIndex: 0,
+        
+        // Преаллоцированные DOD-координаты интерактивной подзоны клика
+        _tabStartX: 0,
+        _tabEndX: 0
     };
 
-    const len = mdlState.themesList.length;
-    for (let i = 0; i < len; i++) {
-        Object.preventExtensions(mdlState.themesList[i]);
-    }
-
+    // Жестко фиксируем форму скрытого класса для рантайма V8 TurboFan
     Object.preventExtensions(mdlState);
     return mdlState;
 }
-
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/modules/theme/theme_mdl.js
- * Время модификации: 18.08.2026 18:05:10 MSK
- */

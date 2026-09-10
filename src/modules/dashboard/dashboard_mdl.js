@@ -1,8 +1,8 @@
 /**
  * @file src/modules/dashboard/dashboard_mdl.js
- * @version 3.0.0-RELEASE-DOD-FORK
+ * @version 3.2.0-RELEASE-DOD-PENNER-TWINNING-PREALLOCATED
  * @description Анемичная модель данных Дашборда (PAC / Abstraction-контур).
- * Чистая ОЗУ-структура числовых параметров аппаратного мониторинга.
+ * ИСПРАВЛЕН ТВИННИНГ: Преаллоцированы вещественные регистры позиционирования каретки ▲ Роберта Пеннера.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
@@ -20,10 +20,18 @@ export function createDashboardMdlInstance() {
         _cpuCores: 1,
         
         totalTransactions: 0,
+        _clockPrescaler: 0, 
+
+        // =================================================================
+        // РЕГИСТРЫ ТВИННИНГА ИНТЕРПОЛЯЦИИ РОБЕРТА ПЕННЕРА (0% OOP)
+        // =================================================================
+        _targetTriangleX: 3,   // Целевая абсцисса догона (куда был совершен клик мыши)
+        _currentTriangleX: 3,  // Текущая вещественная координата каретки ▲ на линейке
+
         _isDirty: true
     };
 
-    // Запечатываем структуру для жесткой фиксации Hidden Class V8
+    // Запечатываем форму для TurboFan JIT-оптимизации Fast Properties
     Object.preventExtensions(mdlState);
     return mdlState;
 }
@@ -31,5 +39,5 @@ export function createDashboardMdlInstance() {
 /** 
  * ПАСПОРТ ЛИСТИНГА:
  * Путь: src/modules/dashboard/dashboard_mdl.js
- * Время модификации: 18.08.2026 18:25:35 MSK
+ * Время исправления: 03.09.2026 14:10:12 MSK
  */

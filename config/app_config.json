@@ -1,4 +1,11 @@
 {
+  "currentBorderAnsiMask": "gray",
+  "currentPassiveAnsiMask": "darkgray",
+  "lastFocusedSlotId": "105",
+  "activeThemeIdx": 2,
+  "bAuditTicksBypass": true,
+  "s102_paths": ["C:/Windows", "C:/slotcmp/III/src", "C:/slotcmp/III/src/modules", "C:/slotcmp/III/config"],
+  "s103_paths": ["C:/", "C:/slotcmp/III/config", "C:/slotcmp/III", "C:/"],
   "view": {
     "bOff": {
       "content": true,
@@ -10,7 +17,7 @@
   "ttni": {
     "bOff": true,
     "bTrace": false,
-    "bLogsIgnore": true,
+    "bLogsIgnore": false,
     "bCaller": false,
     "bKeyLogBypass": false,
     "bSlotLogBypass": false,
@@ -30,19 +37,5 @@
     "GPSS_GENERATE": "INFO",
     "GPSS_SHIPPED": "INFO",
     "UPDATE_VIEW": "INFO"
-  },
-  "lastFocusedSlotId": "105",
-  "activeThemeIdx": 2,
-  "s102_paths": [
-    "C:\\\\",
-    "C:\\\\",
-    "C:\\\\",
-    "C:\\\\"
-  ],
-  "s103_paths": [
-    "C:\\\\",
-    "C:\\\\",
-    "C:\\\\",
-    "C:\\\\"
-  ]
+  }
 }

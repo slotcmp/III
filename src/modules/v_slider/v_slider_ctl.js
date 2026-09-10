@@ -1,76 +1,94 @@
 /**
- * @file src/modules/v_slider/v_slider_ctl.js
- * @version 1.0.0-RELEASE-SMO-VSLIDER-DOD
- * @description Изолированный DOD-контроллер левого вертикального дашборда (id: 100).
- * Paradigm: 0% OOP / 0% try-catch / 0% RegExp / Pure DOD
+ * @file src/core/smo/vscrollbar_ctl.js
+ * @version 1.1.0-RELEASE-SMO-VSCROLLBAR-CTL-DYNAMIC
+ * @description Системный СМО-контроллер Канала 14 обслуживания вертикальных скроллбаров.
+ * ИСПРАВЛЕН СКРОЛЛ: Внедрен адаптивный импорт лимитов контента для логгера и проводников.
+ * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
-// Плоское запечатанное состояние прибора
-const STATE = Object.create(null);
-STATE.width = 4;
-STATE.activeRow = 2; // Строка по умолчанию, где стоит стрелка >
-Object.preventExtensions(STATE);
+import { generateGpssTransaction, _gpssEngineState } from "./bus.js";
 
 /**
- * Прямой инжект растра дашборда в скомпонованную матрицу дерева отображения
- * @param {Array} matrix Плоский массив ячеек {char, attr} из rootDisplayNode.matrix
- * @param {number} ctx_w Реальная ширина экрана
- * @param {number} ctx_h Реальная высота экрана
+ * Главный контур продвижения интентов прокрутки Канала 14
  */
-export function inject_v_slider_raster(matrix, ctx_w, ctx_h) {
-    const max_y = ctx_h | 0;
-    const stride = ctx_w | 0;
+export function processVerticalScrollLogic(facilityState, intentStr, contextPayload, currentTx) {
+    if (!contextPayload || !facilityState) return false;
 
-    for (let y = 0; y < max_y; y++) {
-        // Заполняем строго первые 4 знакоместа каждой строки (x от 0 до 3)
-        const line_offset = (y * stride) | 0;
+    const m = facilityState.mdl;
+    if (!m) return false;
 
-        for (let x = 0; x < 4; x++) {
-            const idx = (line_offset + x) | 0;
-            if (idx >= matrix.length) break;
+    const intent = String(intentStr || "");
+    const targetSlotIdStr = String(contextPayload.targetSlotId || "");
+    const slotIdNum = parseInt(targetSlotIdStr, 10) & 255;
+    if (slotIdNum === 0) return false;
 
-            if (!matrix[idx]) {
-                matrix[idx] = Object.create(null);
-                matrix[idx].char = " ";
-                matrix[idx].attr = 0;
-            }
+    // Считываем живой прибор-адресат прокрутки из реестра СМО
+    const targetFacility = _gpssEngineState.facilitiesRegistry.get(targetSlotIdStr);
+    if (!targetFacility || !Array.isArray(targetFacility.viewStack)) return false;
 
-            // Отрисовка геометрии шкалы
-            if (x === 0) {
-                // Левая граница — индикатор фокуса
-                if (y === STATE.activeRow) {
-                    matrix[idx].char = "▶";
-                    matrix[idx].attr = 31; // Красный фокус
-                } else {
-                    matrix[idx].char = "│";
-                    matrix[idx].attr = 36; // Бирюзовая разметка
-                }
-            } else if (x === 3) {
-                // Правое ребро слайдера, отделяющее его от Explorer
-                matrix[idx].char = "┃";
-                matrix[idx].attr = 36;
-            } else {
-                // Внутренние знакоместа: выводим индекс строки (шкалу)
-                if (x === 1) {
-                    const tens = (y / 10) | 0;
-                    matrix[idx].char = tens > 0 ? String(tens) : "0";
-                    matrix[idx].attr = y === STATE.activeRow ? 31 : 90; // Серый или красный
-                } else if (x === 2) {
-                    matrix[idx].char = String(y % 10);
-                    matrix[idx].attr = y === STATE.activeRow ? 31 : 90;
-                }
-            }
+    const activeIdx = Math.max(0, Math.floor(targetFacility.activeStackIdx || 0));
+    const activeMdl = targetFacility.viewStack[activeIdx]?.mdl;
+    const activeView = targetFacility.viewStack[activeIdx]?.view;
+    if (!activeMdl || !activeView) return false;
+
+    // =================================================================
+    // АДАПТИВНЫЙ ИМПОРТ ЛИМИТOВ КОНТЕНТА ИЗ ЖИВЫХ МОДЕЛЕЙ (0% GC)
+    // =================================================================
+    let totalItems = 1;
+
+    if (targetSlotIdStr === "108") {
+        // Слот 108 (Системный Логгер): берем живой счетчик строк напрямую из его модели
+        totalItems = Math.max(1, Math.floor(activeMdl.totalLogsCount || 0));
+    } else if (targetSlotIdStr === "102" || targetSlotIdStr === "103") {
+        // Слоты 102/103 (Проводники VFS): динамически вычисляем емкость по длине itemsList
+        totalItems = Math.max(1, Array.isArray(activeMdl.itemsList) ? activeMdl.itemsList.length : 0);
+    } else if (targetSlotIdStr === "106") {
+        // Слот 106 (Панель Тем): извлекаем полный размер загруженного JSON
+        totalItems = Math.max(1, Math.floor(activeMdl.totalThemes || 0));
+    } else {
+        // Резервный дефолтный регистр Канала 14
+        totalItems = Math.max(1, Math.floor(m.totalItemsRegistry[slotIdNum] || 1));
+    }
+
+    const currentOffset = Math.floor(m.viewportOffsetRegistry[slotIdNum] || 0);
+    const viewHeight = Math.max(1, Math.floor(activeView.height || 5));
+    const maxVisibleLines = Math.max(1, viewHeight - 4); // Исключаем рамки и табы
+
+    let nextOffset = currentOffset;
+
+    if (intent === "SCROLL_CONTENT_UP") {
+        nextOffset = currentOffset - 1;
+    } 
+    else if (intent === "SCROLL_CONTENT_DOWN") {
+        nextOffset = currentOffset + 1;
+    }
+
+    // Жесткий математический гвард границ скроллинга
+    const maxAllowedOffset = Math.max(0, totalItems - maxVisibleLines);
+    if (nextOffset < 0) nextOffset = 0;
+    if (nextOffset > maxAllowedOffset) nextOffset = maxAllowedOffset;
+
+    // Фиксируем мутацию в ОЗУ-регистрах Канала 14 и синхронизируем с прикладной моделью
+    if (nextOffset !== currentOffset) {
+        m.viewportOffsetRegistry[slotIdNum] = nextOffset;
+        activeMdl.viewportOffset = nextOffset;
+        activeMdl._isDirty = true;
+
+        const kernel = _gpssEngineState.runtime;
+        if (kernel) {
+            if (kernel.virtualCanvasState) kernel.virtualCanvasState.isDirty = true;
         }
-    }
-}
 
-/**
- * Обработка кликов мыши, пролетающих через tty_mouse_parser
- */
-export function process_v_slider_mouse(click_x, click_y) {
-    if (click_x < STATE.width) {
-        STATE.activeRow = click_y | 0;
-        return true; // Транзакт поглощен, нужен такт EXECUTE_RENDER
+        // Выстреливаем такты на перерисовку TUI-кадра
+        generateGpssTransaction("1", "EXECUTE_RENDER", null, "14");
+        return true;
     }
+
     return false;
 }
+
+/** 
+ * ПАСПОРТ ЛИСТИНГА:
+ * Путь: src/core/smo/vscrollbar_ctl.js
+ * Время изменения: 09.09.2026 16:17:00 MSK
+ */

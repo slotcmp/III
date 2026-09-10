@@ -1,154 +1,190 @@
 /**
  * @file src/modules/explorer/explorer_ctl.js
- * @version 3.0.3-RELEASE-SMO-EXPLORER-CTL-DOD
- * @description Контроллер и фазовый фильтр СМО-приборов Проводников 102/103.
- * ИСПРАВЛЕНЫ ИМПОРТЫ И РАЗБОР ПУТЕЙ: Изъят path.join, разбор путей векторизован in-place.
- * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp / 0% try-catch.
+ * @version 3.9.5-RELEASE-SMO-EXPLORER-CTL-STATIC-REGISTERS-PERFECT
+ * @description Контроллер и фазовый фильтр СМО-приборов Проводников (Каналы 102 и 103).
+ * ИСПРАВЛЕН КРАШ EXTENSIONS: Метки двойного клика перенесены в статический ОЗУ-массив _clicksRegistry.
+ * Выполнен в строгой парадигме PAC / DOD / 0% OOP / Zero Allocation / 0% GC.
  */
 
-import { renderExplorerContent } from "./explorer_view.js";
+import path from "node:path";
+import { generateGpssTransaction } from "../../core/smo/bus.js";
 
-/**
- * Старая фабрика сохранена для совместимости автоскана V8, 
- * но рантайм GEN III использует ленивый монтаж через IoC-монтажник slot_maker.js.
- */
+// Стерильный статический ОЗУ-реестр кликов под Каналы 102 и 103 (0% OOP)
+// Смещение: [slotIdNum * 2] = lastClickTime, [slotIdNum * 2 + 1] = lastClickIdx
+const _clicksRegistry = new Float64Array(256);
+
 export function createExplorerController(appHostRef, slotIdStr) {
     const id = String(slotIdStr || "102");
-    const ctlState = { viewStack: null, host: appHostRef, slotId: id };
+    const ctlState = { mdl: null, view: null, host: appHostRef, slotId: id };
     Object.preventExtensions(ctlState);
     return ctlState;
 }
 
-/**
- * Фазовый СМО-фильтр супершины прерываний для Приборов Каналов 102/103
- */
 export function processSpecificExplorerLogic(facilityState, intentStr, contextPayload, currentTx) {
-    const tabs = facilityState.viewStack;
-    if (!tabs || !Array.isArray(tabs)) return false;
+    const pack = facilityState.viewStack;
+    if (!pack) return false;
 
-    // Прецизионно вычисляем индекс активной вкладки из регистра прибора
-    const activeIdx = Math.max(0, Math.min(3, Math.floor(Number(facilityState.activeStackIdx) || 0)));
-    const currentTabPack = tabs[activeIdx];
-    if (!currentTabPack || !currentTabPack.mdl || !currentTabPack.view) return false;
+    const activeIdx = Math.max(0, Math.floor(facilityState.activeStackIdx || 0));
+    const currentTabNode = pack[activeIdx];
+    if (!currentTabNode || !currentTabNode.mdl || !currentTabNode.view) return false;
 
-    const mdl = currentTabPack.mdl;
-    const view = currentTabPack.view;
+    const m = currentTabNode.mdl;
+    const v = currentTabNode.view;
     const intent = String(intentStr || "");
+    const slotIdStr = facilityState.slotId;
     let isMutated = false;
-
-    const maxVisibleRows = Math.max(1, view.height - 4);
 
     switch (intent) {
         case "INJECT_VFS_DATA":
+            if (contextPayload && contextPayload.items) {
+                const srcItemsArray = contextPayload.items;
+                const srcLen = srcItemsArray.length;
+                const stackLen = pack.length;
+
+                for (let i = 0; i < stackLen; i++) {
+                    const node = pack[i];
+                    if (node && node.mdl && node.mdl.itemsList) {
+                        const targetArr = node.mdl.itemsList;
+                        
+                        targetArr.length = 0; 
+                        for (let j = 0; j < srcLen; j++) {
+                            targetArr[j] = srcItemsArray[j]; 
+                        }
+
+                        if (node.mdl.selectedIndex >= targetArr.length) {
+                            node.mdl.selectedIndex = Math.max(0, targetArr.length - 1);
+                        }
+                        node.mdl._isDirty = true;
+                    }
+                }
+
+                const maxVisibleRows = Math.max(1, Math.floor((v.height || 15) - 4));
+                generateGpssTransaction("14", "SYNC_SCROLLBAR_METRICS", {
+                    targetSlotId: slotIdStr,
+                    totalItems: srcLen + 1, 
+                    maxVisibleRows: maxVisibleRows
+                }, slotIdStr);
+
+                isMutated = true;
+            }
+            break;
+
+        case "NOTIFY_SCROLL_MUTATED":
             if (contextPayload) {
-                // Синхронизируем стейт с каноническим полем currentDirectoryPath из slot_maker.js
-                mdl.currentDirectoryPath = String(contextPayload.currentPath || "C:/");
-                mdl.itemsList = Array.isArray(contextPayload.items) ? contextPayload.items : [];
-                mdl.selectedIndex = 0; 
-                mdl.viewportOffset = 0; 
-                mdl._isDirty = true;
+                m.viewportOffset = Math.max(0, Math.floor(contextPayload.viewportOffset || 0));
+                m.selectedIndex  = Math.max(0, Math.floor(contextPayload.selectedIndex || 0));
+                m._isDirty = true;
                 isMutated = true;
             }
             break;
 
-        case "MOVE_CURSOR_DOWN":
-            if (mdl.itemsList && mdl.selectedIndex < mdl.itemsList.length - 1) {
-                mdl.selectedIndex++;
-                if (mdl.selectedIndex >= mdl.viewportOffset + maxVisibleRows) {
-                    mdl.viewportOffset++;
+        case "SWITCH_SLOT_TAB":
+        case "TAB_CLICKED":
+            if (contextPayload) {
+                const rawIdx = contextPayload.targetStackIdx !== undefined ? contextPayload.targetStackIdx :
+                               (contextPayload.tabIdx !== undefined ? contextPayload.tabIdx : undefined);
+
+                if (rawIdx !== undefined) {
+                    const targetTabIdxNum = Math.max(0, Math.floor(rawIdx || 0));
+                    if (targetTabIdxNum < pack.length) {
+                        facilityState.activeStackIdx = targetTabIdxNum;
+                        const nextActiveNode = pack[targetTabIdxNum];
+                        if (nextActiveNode && nextActiveNode.mdl) {
+                            nextActiveNode.mdl._isDirty = true;
+                            if (facilityState.host?.workerGateway) {
+                                const currentPath = String(nextActiveNode.mdl.currentDirectoryPath || "C:/");
+                                facilityState.host.workerGateway.triggerDirectoryIndexing(slotIdStr, currentPath, targetTabIdxNum);
+                            }
+                            isMutated = true;
+                        }
+                    }
                 }
-                mdl._isDirty = true; 
-                isMutated = true;
             }
             break;
 
-        case "MOVE_CURSOR_UP":
-            if (mdl.selectedIndex > 0) {
-                mdl.selectedIndex--;
-                if (mdl.selectedIndex < mdl.viewportOffset) {
-                    mdl.viewportOffset--;
-                }
-                mdl._isDirty = true; 
-                isMutated = true;
-            }
-            break;
-
+        // =================================================================
+        // НЕУЯЗВИМЫЙ ВЫЧИСЛИТЕЛЬНЫЙ КЛИК ПО СТАТИЧЕСКИМ РЕГИСТРАМ ОЗУ
+        // =================================================================
         case "MOUSE_CLICK":
             if (contextPayload && contextPayload.localY !== undefined) {
-                const clickedRowIdx = Math.floor(contextPayload.localY) - 2 + mdl.viewportOffset;
-                if (mdl.itemsList && clickedRowIdx >= 0 && clickedRowIdx < mdl.itemsList.length) {
-                    mdl.selectedIndex = clickedRowIdx;
-                    mdl._isDirty = true; 
-                    isMutated = true;
-                }
-            }
-            break;
-
-        case "ENTER_PRESSED":
-            if (mdl.itemsList && mdl.itemsList.length > 0) {
-                const currentItem = mdl.itemsList[mdl.selectedIndex];
-                if (currentItem && currentItem.isDir) {
-                    let baseDir = String(mdl.currentDirectoryPath);
-                    let nextPath = "";
-
-                    // ПРИНЦИП 0% RegExp: Посимвольная in-place векторизация путей без модуля path
-                    if (currentItem.name === "..") {
-                        // Отрезаем последний сегмент пути до слэша
-                        let lastSlashIdx = -1;
-                        const len = baseDir.length;
+                const localY = Math.floor(contextPayload.localY);
+                
+                if (localY >= 3) {
+                    const totalItems = m.itemsList ? m.itemsList.length : 0;
+                    const targetItemIdx = Math.floor((m.viewportOffset || 0) + (localY - 3));
+                    
+                    if (targetItemIdx >= 0 && targetItemIdx < totalItems) {
+                        const targetItemObj = m.itemsList[targetItemIdx];
                         
-                        // Ищем предпоследний слэш (минуя завершающий)
-                        const searchLimit = baseDir.charAt(len - 1) === "/" ? len - 2 : len - 1;
-                        for (let i = searchLimit; i >= 0; i--) {
-                            if (baseDir.charAt(i) === "/" || baseDir.charAt(i) === "\\") {
-                                lastSlashIdx = i;
-                                break;
+                        if (targetItemObj) {
+                            const nowTimeNum = Date.now();
+                            const slotIdNum = parseInt(slotIdStr, 10) & 127;
+                            
+                            // Извлекаем метки времени из быстрого бинарного Float64Array
+                            const timeRegistryIdx = slotIdNum * 2;
+                            const idxRegistryIdx = slotIdNum * 2 + 1;
+
+                            const lastClickTimeNum = _clicksRegistry[timeRegistryIdx];
+                            const lastClickIdxNum = _clicksRegistry[idxRegistryIdx] - 1; // Корректируем смещение
+
+                            // ПРОВЕРКА НА ДВОЙНОЙ КЛИК (< 300мс на той же строке)
+                            if (targetItemIdx === lastClickIdxNum && (nowTimeNum - lastClickTimeNum) < 300) {
+                                const isDir = targetItemObj.isDir === true || targetItemObj.isDirectory === true;
+                                const itemNameStr = String(targetItemObj.name || "");
+
+                                if (isDir === true) {
+                                    let nextDirectoryPath = "";
+
+                                    if (itemNameStr === "..") {
+                                        nextDirectoryPath = path.dirname(String(m.currentDirectoryPath || "C:/"));
+                                    } else {
+                                        nextDirectoryPath = path.resolve(String(m.currentDirectoryPath || "C:/"), itemNameStr);
+                                    }
+
+                                    m.currentDirectoryPath = nextDirectoryPath;
+                                    m.selectedIndex = 0; 
+                                    
+                                    // Обнуляем метки времени в Float64Array
+                                    _clicksRegistry[timeRegistryIdx] = 0;
+                                    _clicksRegistry[idxRegistryIdx] = 0;
+
+                                    if (facilityState.host?.workerGateway) {
+                                        facilityState.host.workerGateway.triggerDirectoryIndexing(slotIdStr, nextDirectoryPath, activeIdx);
+                                    }
+                                }
+                            } else {
+                                // ОДИНОЧНЫЙ КЛИК: Перемещаем курсор выделения
+                                m.selectedIndex = targetItemIdx;
+                                
+                                // Сохраняем метки в Float64Array без расширения объектов JS
+                                _clicksRegistry[timeRegistryIdx] = nowTimeNum;
+                                _clicksRegistry[idxRegistryIdx] = targetItemIdx + 1; // +1 для защиты от дефолтного 0
                             }
-                        }
-                        
-                        if (lastSlashIdx !== -1) {
-                            nextPath = baseDir.substring(0, lastSlashIdx + 1);
-                        } else {
-                            nextPath = "C:/"; // Корневой дефолт-гвард
-                        }
-                    } else {
-                        // Склеиваем путь с гвардом нормализации разделителей
-                        if (baseDir.charAt(baseDir.length - 1) !== "/" && baseDir.charAt(baseDir.length - 1) !== "\\") {
-                            baseDir += "/";
-                        }
-                        nextPath = baseDir + currentItem.name;
-                    }
 
-                    if (facilityState.host?.workerGateway?.triggerDirectoryIndexing) {
-                        facilityState.host.workerGateway.triggerDirectoryIndexing(facilityState.slotId, nextPath, activeIdx);
+                            m._isDirty = true;
+                            isMutated = true;
+                        }
                     }
-                    isMutated = true;
                 }
             }
             break;
 
         case "ROTATE_SLOT_STACK":
-            // Рокировка вью-стека вкладок (Карусель 0 -> 1 -> 2 -> 3)
-            const nextTabIdx = (activeIdx + 1) % 4;
-            facilityState.activeStackIdx = nextTabIdx;
-            
-            if (facilityState.host?.workerGateway?.triggerDirectoryIndexing) {
-                facilityState.host.workerGateway.triggerDirectoryIndexing(facilityState.slotId, mdl.currentDirectoryPath, nextTabIdx);
-            }
-            mdl._isDirty = true; 
-            isMutated = true;
-            break;
-            
         case "UPDATE_THEME_MASK":
-            mdl._isDirty = true;
+            m._isDirty = true;
             isMutated = true;
             break;
     }
-    
-    // ФАЗА Б МАНИФЕСТА: Вызываем отрисовщик строго в конце такта финализации мутаций
-    if (isMutated || intent === "SMO_PHASE_CONTENT") {
-        renderExplorerContent(view, mdl, activeIdx);
+
+    if (isMutated && facilityState.host?.virtualCanvasState) {
+        facilityState.host.virtualCanvasState.isDirty = true;
     }
-    
+
     return isMutated;
 }
+
+/** 
+ * ПАСПОРТ ЛИСТИНГА:
+ * Путь: src/modules/explorer/explorer_ctl.js
+ * Время изменения: 05.09.2026 13:30:15 MSK
+ */

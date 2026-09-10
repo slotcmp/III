@@ -1,98 +1,76 @@
 /**
  * @file src/io/terminal/viewport_frame_drawer.js
- * @version 3.5.0-RELEASE-SMO-VIEWPORT-FRAME-DRAWER-STRICT-GOLD
- * @description Процедурный выжигатель стальных рамок вокруг TUI-компонентов (Presentation-контур).
- * ИСПРАВЛЕН ФОКУС: Золотой контур горит безусловно при флаге активности окна без участия масок JSON.
- * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
+ * @version 4.7.1-RELEASE-SMO-FRAME-DRAWER-Z3-EXPORT-FIXED
+ * @description Центральный системный сборщик элементов обвеса рамы (Presentation-контур).
+ * ИСПРАВЛЕНА СВЯЗЬ ОВЕРЛЕЕВ: Внедрен прямой реэкспорт drawWindowButtonsOverlay для редьюсера Z-3.
+ * Выполнен в строгой парадигме PAC / DOD / 0% OOP.
  */
 
-import { _gpssEngineState } from "../../core/smo/bus.js";
-import { resolveWebColor } from "../../core/layout/layout_color_map.js";
-import { drawFrameTitle } from "./frame_title_renderer.js";
-import { drawFrameQueueIndicator } from "./frame_queue_renderer.js";
+import { drawFacilityWindowFrame } from "./frame_decorator.js";
 import { drawFrameGeoPassport } from "./frame_geo_renderer.js";
+import { drawFrameQueueIndicator } from "./frame_queue_renderer.js";
+
+import { packCellBits } from "./sprite_blit.js";
+import { _gpssEngineState } from "../../core/smo/bus.js";
 
 /**
- * Накатывает символы контура рамы поверх ячеек UHD-буфера строго по координатам m[y][x]
- * @param {Object} node Узел отображения, содержащий матрицу и размеры
- * @param {string} compTypeStr Строковый тип компонента
- * @param {string} slotIdStr Идентификатор слота СМО
- * @param {boolean} isFocusedBool Флаг активности/фокуса панели в интерфейсе
+ * Выполняет комплексную финализацию внешнего вида СМО-окна на глобальном холсте кадра
  */
-export function drawDisplayNodeFrame(node, compTypeStr, slotIdStr, isFocusedBool) {
-    if (!node) return;
-    const m = node.matrix;
-    if (!m) return;
+export function drawDisplayNodeFrame(targetMatrix, compTypeStr, slotIdStr, isFocusedBool, sX, sY, sW, sH) {
+    // 1. Накатываем стальные ребра окна ╔ ═ ╗ ║, паспорт заголовка и КНОПКИ
+    drawFacilityWindowFrame(targetMatrix, sX, sY, sW, sH, isFocusedBool, compTypeStr, slotIdStr);
 
-    const w = Math.floor(node.w || 40);
-    const h = Math.floor(node.h || 5);
-    if (w < 2 || h < 2) return;
+    if (sW < 6 || sH < 3) return;
 
-    // Извлекаем прибор напрямую из суверенного Map-реестра шины СМО
+    // 2. ВЫЖИГ ЖИВОГО ПУТИ VFS НА НИЖНЮЮ ГРАНЬ (Y = sY + sH - 1)
+    const botRow = targetMatrix[sY + sH - 1];
     const facility = _gpssEngineState.facilitiesRegistry.get(slotIdStr);
-    const displayIndex = facility ? Math.floor(facility.displayIndex || 0) : 0;
-    const rawViewStack = facility ? facility.viewStack : null;
 
-    // ПРЕЦИЗИОННОЕ ИСПРАВЛЕНИЕ: Золотой фокус имеет абсолютный приоритет над конфигом
-    const themeColorAnsi = isFocusedBool ? "\x1b[38;5;220m" : "\x1b[38;5;242m"; // Золото для активного, сталь для пассивного
-    const bgColor = "\x1b[40m";
-
-    // 1. Двойные горизонтальные ребра (═) строго по индексам строк Y=0 и Y=h-1
-    const topRow = m[0];
-    const botRow = m[h - 1];
-
-    if (topRow && botRow) {
-        for (let x = 0; x < w; x++) {
-            if (topRow[x]) {
-                topRow[x].char = "═";
-                topRow[x].fg = themeColorAnsi;
-                topRow[x].bg = bgColor;
-            }
-            if (botRow[x]) {
-                botRow[x].char = "═";
-                botRow[x].fg = themeColorAnsi;
-                botRow[x].bg = bgColor;
-            }
-        }
-    }
-
-    // 2. Двойные вертикальные ребра (║) строго по X=0 и X=w-1 для каждой строки Y
-    for (let y = 0; y < h; y++) {
-        const row = m[y];
-        if (row) {
-            if (row[0]) {
-                row[0].char = "║";
-                row[0].fg = themeColorAnsi;
-                row[0].bg = bgColor;
-            }
-            if (row[w - 1]) {
-                row[w - 1].char = "║";
-                row[w - 1].fg = themeColorAnsi;
-                row[w - 1].bg = bgColor;
-            }
-        }
-    }
-
-    // 3. Двойные угловые TUI-засечки строго в точечные координаты ячеек матрицы
-    if (topRow && botRow) {
-        if (topRow[0])     { topRow[0].char = "╔";     topRow[0].fg = themeColorAnsi;     topRow[0].bg = bgColor; }
-        if (topRow[w - 1]) { topRow[w - 1].char = "╗"; topRow[w - 1].fg = themeColorAnsi; topRow[w - 1].bg = bgColor; }
-        if (botRow[0])     { botRow[0].char = "╚";     botRow[0].fg = themeColorAnsi;     botRow[0].bg = bgColor; }
-        if (botRow[w - 1]) { botRow[w - 1].char = "╝"; botRow[w - 1].fg = themeColorAnsi; botRow[w - 1].bg = bgColor; }
-    }
-
-    // ВПЕКАНИЕ ПАСПОРТА РАМЫ
-    if (topRow) {
-        drawFrameTitle(topRow, compTypeStr, slotIdStr, w, isFocusedBool);
-        drawFrameQueueIndicator(topRow, slotIdStr, displayIndex, rawViewStack, w, facility);
-    }
     if (botRow) {
-        drawFrameGeoPassport(botRow, w, h);
+        // По умолчанию чертим стандартный штамп геометрии [WxH] справа
+        drawFrameGeoPassport(botRow, sX, sW, sH);
+
+        // Если это Проводник — врезаем актуальный путь папки на левую сторону нижней рамки
+        if ((compTypeStr === "explorer" || slotIdStr === "102" || slotIdStr === "103") && facility && facility.viewStack) {
+            const activeIdx = Math.max(0, Math.floor(facility.activeStackIdx || 0));
+            const activeNode = Array.isArray(facility.viewStack) ? facility.viewStack[activeIdx] : facility.viewStack;
+            const activeMdl = activeNode?.mdl;
+
+            if (activeMdl && activeMdl.currentDirectoryPath) {
+                const rawPathStr = String(activeMdl.currentDirectoryPath);
+                // Формируем красивый TUI-паспорт стыка ребер: ╡ C:/Windows ╞
+                const pathPassportStr = "╡ " + rawPathStr + " ╞";
+                const pLen = pathPassportStr.length;
+
+                // Защитный гвард: выводим путь только если он физически влезает в рамку, не перетирая геометрию
+                if (sW > pLen + 15) {
+                    const startPathX = sX + 2; // Небольшой отступ от левого угла '╚'
+                    const pathColorAnsi = isFocusedBool ? "\x1b[38;5;231m" : "\x1b[38;5;244m"; // Белый или стальной
+                    const bgColorStr = "\x1b[40m";
+
+                    for (let t = 0; t < pLen; t++) {
+                        botRow[startPathX + t] = packCellBits(pathPassportStr.charAt(t), pathColorAnsi, bgColorStr);
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Отрисовка паспорта вью-стека слота [1: 101 1/2]== в правом верхнем углу рамы
+    const topRow = targetMatrix[sY];
+    if (topRow && facility) {
+        let displayIndexNum = Math.floor(facility.displayIndex || 0);
+        drawFrameQueueIndicator(topRow, sX, slotIdStr, displayIndexNum, facility.viewStack, sW, facility);
     }
 }
+
+// =================================================================
+// ИСПРАВЛЕНИЕ ЛИНКОВКИ: ПРЯМОЙ РЕЭКСПОРТ ДЛЯ КОНВЕЙЕРА СЛОЯ Z-3
+// =================================================================
+export { drawWindowButtonsOverlay } from "./frame_decorator.js";
 
 /** 
  * ПАСПОРТ ЛИСТИНГА:
  * Путь: src/io/terminal/viewport_frame_drawer.js
- * Время модификации: 21.08.2026 16:55:00 MSK
+ * Время изменения: 09.09.2026 14:31:10 MSK
  */

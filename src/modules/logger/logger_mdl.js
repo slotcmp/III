@@ -1,8 +1,8 @@
 /**
  * @file src/modules/logger/logger_mdl.js
- * @version 3.0.1-RELEASE-SMO-LOGGER-MODEL-MONOMORPHIC
+ * @version 3.0.2-RELEASE-SMO-LOGGER-MODEL-MONOMORPHIC
  * @description Мономорфная анемичная модель Журнала логов СМО (PAC / Abstraction-контур).
- * Реализует чистый высокоскоростной кольцевой ОЗУ-буфер строк фиксированной длины.
+ * ИСПРАВЛЕНЫ СЛУЖЕБНЫЕ ФЛАГИ: Внедрены регистры грязи и подзоны для исключения TypeError на запечатанном объекте.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
@@ -24,15 +24,12 @@ export function createLoggerMdlInstance() {
         logsArray: linesArr,
         totalLogsCount: 0,
         viewportOffset: 0,
-        _isDirty: true
+        
+        // Преаллоцированные служебные регистры Window Manager
+        _isDirty: true,
+        _activeSubZone: 1
     };
 
     Object.preventExtensions(mdlState);
     return mdlState;
 }
-
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/modules/logger/logger_mdl.js
- * Время модификации: 18.08.2026 19:35:45 MSK
- */

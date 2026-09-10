@@ -1,62 +1,95 @@
 /**
  * @file src/io/terminal/tty_mouse_parser.js
- * @version 3.0.1-RELEASE-DOD-FORK
- * @description Плоский потоковый парсер SGR-мыши. 
- * ИСПРАВЛЕНА МАРШРУТИЗАЦИЯ И I/O: Удален appendFileSync, интент унифицирован под Слот 10.
- * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp / 0% try-catch.
+ * @version 6.2.0-RELEASE-SMO-MOUSE-PARSER-DECOUPLED
+ * @description Центральный WM-диспетчер SGR-мыши платформы SLOTCMP III.
+ * ИСПРАВЛЕНО МОНОЛИТИЗИРОВАНИЕ: Логика маршрутизации вынесена в изолированный модуль mouse_router.js.
+ * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
-import { generateGpssTransaction } from "../../core/smo/bus.js";
-
-export const _mouseParserState = {
-    _lastClickTime: 0,
-    _lastClickSlot: "",
-    _lastClickLocalY: -1
-};
-Object.preventExtensions(_mouseParserState);
+import { generateGpssTransaction, _gpssEngineState, _activeThemeState } from "../../core/smo/bus.js";
+import { routeMouseIntent } from "./mouse/mouse_router.js";
 
 /**
- * Чистая процедура: транслирует байты мыши в СМО-канал системного прибора Слота 10
- * @param {number} btn Декодированный код кнопки/состояния мыши
- * @param {number} mX Абсолютная координата X на экране терминала (1-based)
- * @param {number} mY Абсолютная координата Y на экране терминала (1-based)
- * @param {boolean} isReleaseChar Флаг отпускания кнопки мыши
- * @param {Object} staticSlots Ссылка на реестр статичных слотов
- * @param {Object} kernel Ссылка на ОЗУ-рантайм хоста ядра
+ * Парсит байты ConPTY, выполняет O(1) хит-тест геометрии окон и переключает фокус в шине
  */
 export function parseAndDispatchSgr(btn, mX, mY, isReleaseChar, staticSlots, kernel) {
-    if (!kernel) return;
+    if (!kernel || !kernel.calculatedGeoMap) return;
 
-    // Переводим 1-based координаты ConPTY в канонические 0-based индексы UHD-матрицы ОЗУ
     const checkX = Math.max(0, Math.floor(Number(mX) || 1) - 1);
     const checkY = Math.max(0, Math.floor(Number(mY) || 1) - 1);
     const buttonCode = Math.max(0, Math.floor(Number(btn) || 0));
 
-    let mouseAction = "";
+    let rawMouseAction = "";
+    let isWheelEvent = false;
 
     if ((buttonCode & 64) !== 0) {
-        // КОЛЕСИКО МЫШИ (СКРОЛЛ)
-        mouseAction = ((buttonCode & 1) === 0) ? "MOVE_CURSOR_UP" : "MOVE_CURSOR_DOWN";
+        const wheelDirectionBit = buttonCode & 3;
+        rawMouseAction = (wheelDirectionBit === 0) ? "WHEEL_UP" : "WHEEL_DOWN";
+        isWheelEvent = true;
     } else if ((buttonCode & 3) === 0 && !isReleaseChar) {
-        // ЛЕВАЯ КНОПКА МЫШИ (КЛИК)
-        mouseAction = "MOUSE_CLICK";
+        rawMouseAction = "MOUSE_CLICK";
     }
 
-    // Если тип события не распознан — мгновенно гасим прерывание, не нагружая шину
-    if (mouseAction.length === 0) return;
+    if (rawMouseAction.length === 0) return;
 
-    // Формируем плоский пассивный контекст для хит-тестера
-    const mouseContextTxPayload = { 
-        x: checkX, 
-        y: checkY, 
-        action: mouseAction 
-    };
-    Object.preventExtensions(mouseContextTxPayload);
+    const activeFacilitiesKeys = _gpssEngineState.facilitiesKeysCached;
+    const len = activeFacilitiesKeys.length;
+    let targetSlotIdStr = "105";
 
-    // ИСПРАВЛЕНИЕ: Выстреливаем единый тактовый транзакт на Системный Слот 10.
-    // Сам интент действия упакован внутрь полезной нагрузки (payload.action) 
-    // для корректного разбора продвигателем advanceMouseQueueFacility.
-    if (typeof generateGpssTransaction === "function") {
-        generateGpssTransaction("10", "MOUSE_INTERRUPT", mouseContextTxPayload);
+    for (let i = 0; i < len; i++) {
+        const slotId = activeFacilitiesKeys[i];
+        if (slotId === "0" || slotId === "1" || slotId === "4" || slotId === "9" || slotId === "10" || slotId === "11" || slotId === "12" || slotId === "14") {
+            continue;
+        }
+
+        const geo = kernel.calculatedGeoMap[slotId];
+        if (geo) {
+            if (checkX >= geo.x && checkX < geo.x + geo.w && checkY >= geo.y && checkY < geo.y + geo.h) {
+                targetSlotIdStr = slotId;
+                break;
+            }
+        }
     }
+
+    const geo = kernel.calculatedGeoMap[targetSlotIdStr];
+    if (!geo) return;
+
+    const localX = checkX - geo.x;
+    const localY = checkY - geo.y;
+
+    const subZonesRegistry = _gpssEngineState.activeSubZonesRegistry;
+
+    // Быстрая попиксельная разметка подзон
+    if (localY === 0 || localY === geo.h - 1 || localX === 0 || localX === geo.w - 1) {
+        subZonesRegistry[targetSlotIdStr] = 2; // Границы окон WM
+    } else if (localY === 1 && geo.h >= 5) {
+        subZonesRegistry[targetSlotIdStr] = 0; // Строка Вкладок (Канал 12)
+    } else {
+        subZonesRegistry[targetSlotIdStr] = 1; // Контентная рабочая зона
+    }
+
+    if (rawMouseAction === "MOUSE_CLICK") {
+        if (targetSlotIdStr !== "108") {
+            _activeThemeState.focusedSlotIdStr = targetSlotIdStr;
+            if (kernel.model?.logicalState) {
+                kernel.model.logicalState.focusedSlotId = targetSlotIdStr;
+            }
+            kernel.virtualCanvasState.isDirty = true;
+        }
+
+        if (subZonesRegistry[targetSlotIdStr] === 2) {
+            const resizePayload = { slotId: targetSlotIdStr, localX: localX, localY: localY };
+            generateGpssTransaction("9", "RESIZE_SLOT_GEOMETRY", resizePayload, "10");
+            return;
+        }
+    }
+
+    // Делегируем тяжелую семантическую маршрутизацию размоноличенному ядру
+    routeMouseIntent(targetSlotIdStr, rawMouseAction, isWheelEvent, geo, localX, localY, checkX, checkY);
 }
+
+/** 
+ * ПАСПОРТ ЛИСТИНГА:
+ * Путь: src/io/terminal/tty_mouse_parser.js
+ * Время изменения: 06.09.2026 18:55:15 MSK
+ */

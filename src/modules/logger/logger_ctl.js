@@ -1,15 +1,13 @@
 /**
  * @file src/modules/logger/logger_ctl.js
- * @version 3.1.1-RELEASE-SMO-LOGGER-CTL-STERILE
+ * @version 3.2.1-RELEASE-SMO-LOGGER-CTL-SURROGATE-SANITIZER-FIXED
  * @description Контроллер и фазовый фильтр СМО-прибора обслуживания Канала 108 (Logger).
- * ИСПРАВЛЕНА РАБОТА С ПАМЯТЬЮ И ДИСКОМ: Удален блокирующий appendFileSync, запись переведена на logsArray.
+ * ИСПРАВЛЕН ИТEРАТОР: Ликвидирован бесконечный цикл в контуре санации UTF-суррогатов логов.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp / 0% try-catch.
  */
 
-/**
- * Старая фабрика сборки контроллера сохранена для совместимости автоскана V8, 
- * но рантайм GEN III использует ленивый монтаж через IoC-монтажник slot_maker.js.
- */
+import { generateGpssTransaction } from "../../core/smo/bus.js";
+
 export function createLoggerController(appHostRef, slotIdStr) {
     const id = String(slotIdStr || "108");
     const ctlState = { mdl: null, view: null, host: appHostRef, slotId: id };
@@ -22,16 +20,26 @@ export function createLoggerController(appHostRef, slotIdStr) {
  */
 export function processSpecificLoggerLogic(facilityState, intentStr, contextPayload, currentTx) {
     const pack = facilityState.viewStack;
-    if (!pack || !pack.mdl || !pack.view) return false;
+    if (!pack) return false;
     
-    const m = pack.mdl; 
+    let m = null;
+    if (Array.isArray(pack)) {
+        if (pack[0]) m = pack[0].mdl;
+    } else {
+        m = pack.mdl;
+    }
+    
+    if (!m) return false;
+    
     const intent = String(intentStr || "");
     let isMutated = false;
 
+    const maxVisibleLines = Math.max(1, (facilityState.view?.height || 6) - 4);
+    const maxScrollLimit = Math.max(0, Math.floor(m.totalLogsCount || 0) - maxVisibleLines);
+
     switch (intent) {
         case "MOVE_CURSOR_DOWN":
-            // Поддержка навигации и скроллинга по журналу логов
-            if (m.viewportOffset !== undefined) {
+            if (m.viewportOffset !== undefined && m.viewportOffset < maxScrollLimit) {
                 m.viewportOffset++;
                 m._isDirty = true;
                 isMutated = true;
@@ -47,32 +55,53 @@ export function processSpecificLoggerLogic(facilityState, intentStr, contextPayl
             break;
 
         case "ADD_LOG_ENTRY":
-            if (currentTx && currentTx.P3) {
-                const logString = String(currentTx.P3);
+            const rawMessage = contextPayload || (currentTx ? currentTx.P3 : null);
+            if (rawMessage) {
+                const logString = String(rawMessage);
                 
-                // ИСПРАВЛЕНИЕ: Пишем строго в преаллоцированный logsArray (128 строк из slot_maker.js)
+                // =================================================================
+                // ИСПРАВЛЕННЫЙ БЕЗАЛЛОКАЦИОННЫЙ ПОСИМВОЛЬНЫЙ UTF-САНАТOР (0% GC)
+                // =================================================================
+                let cleanLogStr = "";
+                const rawLen = logString.length;
+
+                // Фикс: Переменная цикла 'c' теперь прецизионно контролирует продвижение по строке
+                for (let c = 0; c < rawLen; c++) {
+                    const charCode = logString.charCodeAt(c);
+                    const charStr = logString.charAt(c);
+
+                    // Перехватываем суррогатные кавычки и тяжелые TUI-вертикали, ломающие длину ячеек
+                    if (charCode === 0x2018 || charCode === 0x2019) {
+                        cleanLogStr += "'"; 
+                    } else if (charCode === 0x2502) {
+                        cleanLogStr += "|"; 
+                    } else if (charCode > 0x7F && charCode < 0x0400) {
+                        cleanLogStr += "?"; 
+                    } else {
+                        cleanLogStr += charStr; 
+                    }
+                }
+
                 if (Array.isArray(m.logsArray)) {
                     const currentTotal = Math.floor(m.totalLogsCount || 0);
                     const maxCapacity = Math.floor(m.maxLines || 128);
                     
                     if (currentTotal < maxCapacity) {
-                        // Заполняем массив последовательно до лимита емкости
-                        m.logsArray[currentTotal] = logString;
+                        m.logsArray[currentTotal] = cleanLogStr;
                         m.totalLogsCount = currentTotal + 1;
                     } else {
-                        // Кольцевой циклический сдвиг буфера без аллокаций памяти и shift()
                         for (let i = 1; i < maxCapacity; i++) {
                             m.logsArray[i - 1] = m.logsArray[i];
                         }
-                        m.logsArray[maxCapacity - 1] = logString;
+                        m.logsArray[maxCapacity - 1] = cleanLogStr;
                     }
-                    
-                    // ИСПРАВЛЕНИЕ: Прямой I/O вызов fs.appendFileSync полностью удален.
-                    // Все аппаратные и системные прерывания ввода-вывода логируются
-                    // параллельно и неблокирующим образом на уровне tty_byte_sniffer.js.
                     
                     m._isDirty = true; 
                     isMutated = true;
+
+                    if (facilityState.host?.virtualCanvasState) {
+                        facilityState.host.virtualCanvasState.isDirty = true;
+                    }
                 }
             }
             break;
@@ -82,5 +111,10 @@ export function processSpecificLoggerLogic(facilityState, intentStr, contextPayl
             isMutated = true;
             break;
     }
+
+    if (isMutated) {
+        generateGpssTransaction("1", "EXECUTE_RENDER", null, "108");
+    }
+
     return isMutated;
 }

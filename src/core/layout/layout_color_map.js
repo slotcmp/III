@@ -1,12 +1,11 @@
 /**
  * @file src/core/layout/layout_color_map.js
- * @version 2.5.1-RELEASE-GOLDEN-MONOMORPHIC
+ * @version 2.6.0-RELEASE-GOLDEN-MONOMORPHIC-PASSIVE-SHADING-FIXED
  * @description Статическая DOD-таблица трансляции веб-алиасов в ANSI Xterm-256 (PAC / Abstraction).
- * ИСПРАВЛЕНЫ АЛЛОКАЦИИ: Поиск переведен на мономорфный Map для сохранения оптимизации TurboFan.
+ * ИСПРАВЛЕНО ЗАТУХАНИЕ: Добавлен безаллокационный маппер приглушенных тонов для пассивных рамок.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
-// ИСПРАВЛЕНИЕ: Переводим словарь на Map для мгновенной JIT-оптимизации хэш-поиска
 const _COLOR_MAP_REGISTRY = new Map([
     ["black",    "\x1b[38;5;16m"],
     ["red",      "\x1b[38;5;196m"],
@@ -32,29 +31,36 @@ const _COLOR_MAP_REGISTRY = new Map([
 
 const SAFE_DEFAULT_WHITE = "\x1b[38;5;231m";
 
-/**
- * Прецизионный резолвер цвета: транслирует строковый алиас в готовый ANSI Xterm-256 токен
- * @param {string|null|undefined} colorStr Входной строковый алиас цвета
- * @returns {string} Готовая ANSI-последовательность для терминала
- */
 export function resolveWebColor(colorStr) {
     if (colorStr === undefined || colorStr === null) return SAFE_DEFAULT_WHITE;
-    
-    // Быстрый примитивный гвард для строк-последовательностей, начинающихся с ESC
     if (typeof colorStr === "string" && colorStr.length > 0) {
-        if (colorStr.charCodeAt(0) === 0x1B) {
-            return colorStr; // Это уже готовая ANSI маска, пропускаем аллокации
-        }
+        if (colorStr.charCodeAt(0) === 0x1B) return colorStr; 
     }
-
     const cleanStr = String(colorStr).trim().toLowerCase();
     if (cleanStr.length === 0) return SAFE_DEFAULT_WHITE;
-    
-    // ИСПРАВЛЕНИЕ: Безопасный мономорфный поиск через внутренние скомпилированные хэш-индексы V8 Map
     const resolvedAnsi = _COLOR_MAP_REGISTRY.get(cleanStr);
-    if (resolvedAnsi !== undefined) {
-        return resolvedAnsi;
-    }
-    
+    if (resolvedAnsi !== undefined) return resolvedAnsi;
     return String(colorStr);
 }
+
+/**
+ * ИСПРАВЛЕНИЕ: Безаллокационный транслятор активного цвета темы в приглушенный пассивный аналог.
+ * Если прямого соответствия нет — возвращает низкоуровневую темную сталь (darkgray) во избежание выбивания глаз.
+ * @param {string} activeAliasStr Исходный цвет активной темы
+ * @returns {string} Алиас пассивного затухания
+ */
+export function getPassiveColorAlias(activeAliasStr) {
+    const clean = String(activeAliasStr).trim().toLowerCase();
+    if (clean === "blue" || clean === "cyan" || clean === "aqua") return "navy";
+    if (clean === "red") return "maroon";
+    if (clean === "lime") return "green";
+    if (clean === "yellow" || clean === "gold") return "olive";
+    if (clean === "purple") return "darkgray"; // Фирменный неоновый пассивный контраст
+    return "gray";
+}
+
+/** 
+ * ПАСПОРТ ЛИСТИНГА:
+ * Путь: src/core/layout/layout_color_map.js
+ * Время исправления: 03.09.2026 11:54:10 MSK
+ */

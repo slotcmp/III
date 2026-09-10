@@ -1,86 +1,67 @@
 /**
- * @file: src/modules/command_view.js
- * @path: C:\slotcmd_3\src\modules\command_view.js
- * @version: 3.0.0-RELEASE-DOD-FORK
- * @description: Пассивное TUI-представление Командной строки. Осуществляет посимвольное впекание растра (0% RegExp, No BOM, 0% Class).
- * @revision: #0817-COMMAND-VIEW-DOD
+ * @file src/modules/command/command_view.js
+ * @version 3.0.1-RELEASE-SMO-COMMAND-VIEW-STRICT-INDEX
+ * @description Процедурный отрисовщик TUI-строки ввода команд Слота 105.
+ * ИСПРАВЛЕН КРАШ ИНДЕКСАЦИИ: Извлечена единственная строка matrix из двумерного буфера кадра.
+ * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp / Zero Allocation.
  */
+
+import { packCellBits } from "../../io/terminal/sprite_blit.js";
 
 /**
- * ЧИСТАЯ ФУНКЦИЯ-ФАБРИКА: Аллокация пассивной UHD-матрицы знакомест Слота
- * @returns {Object} Запечатанный буфер кадра
+ * Унифицированная процедура рендеринга контента командной строки CLI под высоту 1
  */
-export function createCommandViewInstance(slotIdStr) {
-    const viewState = {
-        slotId: String(slotIdStr || "105"),
-        width: 120,
-        height: 3,
-        
-        _isFocused: false,
-        _borderColorWebName: "gray",
-        
-        // Преаллоцированный UHD-массив знакомест 512x64 для защиты от Out of Bounds при ресайзах
-        localBuffer: {
-            matrix: null
-        }
-    };
+export function renderContent(matrix, currentW, currentH, mdl, activeTabIdx, slotIdStr, viewStack) {
+    if (!matrix || !mdl) return;
 
-    const m = new Array(64);
-    for (let y = 0; y < 64; y++) {
-        m[y] = new Array(512);
-        for (let x = 0; x < 512; x++) {
-            m[y][x] = { char: " ", fg: "\x1b[37m", bg: "\x1b[40m" };
-            Object.preventExtensions(m[y][x]);
-        }
-        Object.preventExtensions(m[y]);
-    }
+    const w = Math.floor(currentW || 120);
     
-    viewState.localBuffer.matrix = m;
-    Object.preventExtensions(viewState.localBuffer);
-    Object.preventExtensions(viewState);
-    return viewState;
-}
-
-/**
- * ЧИСТАЯ ВНЕШНЯЯ ПРОЦЕДУРА: Параметрическое выжигание контента модели поверх растра вьюхи
- * Сама вьюха пассивна — её и модель связывает СМО-движок в аргументах этого вызова
- */
-export function renderCommandContent(view, mdl) {
-    if (!view || !mdl || !view.localBuffer.matrix) return;
-
-    const m = view.localBuffer.matrix;
-    const currentW = Math.max(1, Math.floor(view.width || 120));
-    
-    // Выжигаем строку ввода на фиксированной TUI-линии Y = 1 (внутри рамки окна)
-    const contentRowY = 1;
-    const row = m[contentRowY];
+    // ИСПРАВЛЕНИЕ: Извлекаем строго первую контентную строку (индекс 0) из двумерного массива локальной матрицы
+    const row = matrix[0];
     if (!row) return;
 
-    // Отрисовываем приглашение командной строки
-    row[1].char = ">";
-    row[1].fg = "\x1b[38;5;220m"; // Золотой цвет ANSI
-    row[1].bg = "\x1b[40m";
+    const fgPrompt = "\x1b[38;5;46m"; // Яркий зеленый цвет для приглашения "> "
+    const fgText = "\x1b[38;5;231m";   // Белый текст для вводимых команд
+    const bgColor = "\x1b[40m";        // Черный фон
 
-    const maxTextCols = currentW - 5; 
-    const len = Math.min(Math.floor(mdl.textLength || 0), maxTextCols);
-    const cursorX = Math.max(0, Math.floor(mdl.cursorX || 0));
+    let currentX = 0;
 
-    // Параметрический цикл: формируем символы и каретку курсора на основе регистров mdl
-    for (let x = 0; x < maxTextCols; x++) {
-        const targetX = 3 + x; 
-        const cell = row[targetX];
-        if (!cell) break;
+    // 1. ВЫВОД ПРИГЛАШЕНИЯ КОМАНДНОЙ СТРОКИ "> " С НАЧАЛА СТРОКИ (X = 0)
+    if (currentX < w) { row[currentX] = packCellBits(">", fgPrompt, bgColor); currentX++; }
+    if (currentX < w) { row[currentX] = packCellBits(" ", fgPrompt, bgColor); currentX++; }
 
-        const isCursorPos = (x === cursorX && view._isFocused);
+    // 2. ВЫВОД ТЕКСТА ИЗ ЖИВOГО БУФЕРА ВВОДА МОДЕЛИ CLI
+    const rawInputBufferStr = String(mdl.inputBuffer || mdl.commandString || "");
+    const bufferLen = rawInputBufferStr.length;
+    const cursorPosition = Math.floor(mdl.cursorX || 0);
 
-        if (x < len) {
-            cell.char = String(mdl.charBuffer[x] || " ");
-            cell.fg = isCursorPos ? "\x1b[38;5;16m" : "\x1b[38;5;231m";
-            cell.bg = isCursorPos ? "\x1b[48;5;231m" : "\x1b[40m"; // Инверсия цвета под курсором
-        } else {
-            cell.char = " ";
-            cell.fg = "\x1b[37m";
-            cell.bg = isCursorPos ? "\x1b[48;5;231m" : "\x1b[40m"; 
+    for (let i = 0; i < bufferLen; i++) {
+        if (currentX < w) {
+            const isCursorZone = (i === cursorPosition && mdl.isFocused !== false);
+            const bg = isCursorZone ? "\x1b[48;5;231m" : bgColor;
+            const fg = isCursorZone ? "\x1b[38;5;16m" : fgText;
+
+            row[currentX] = packCellBits(rawInputBufferStr.charAt(i), fg, bg);
+            currentX++;
         }
     }
+
+    // 3. ОТРИСОВКА ПУСТОГО КУРСOРА В КОНЦЕ СТРОКИ
+    if (cursorPosition >= bufferLen && currentX < w && mdl.isFocused !== false) {
+        row[currentX] = packCellBits(" ", "\x1b[38;5;16m", "\x1b[48;5;231m");
+        currentX++;
+    }
+
+    // 4. ЗАБИВАЕМ ОСТАТОК СТРОКИ ВВОДА ПРОБЕЛАМИ ДО КРАЯ ЭКРАНА ТЕРМИНАЛА
+    const cleanSpaceBits = packCellBits(" ", fgText, bgColor);
+    while (currentX < w) {
+        row[currentX] = cleanSpaceBits;
+        currentX++;
+    }
 }
+
+/** 
+ * ПАСПОРТ ЛИСТИНГА:
+ * Путь: src/modules/command/command_view.js
+ * Время изменения: 10.09.2026 15:53:10 MSK
+ */

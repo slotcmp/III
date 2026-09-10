@@ -1,12 +1,13 @@
 /**
  * @file src/io/terminal/tty_mouse_decoder.js
- * @version 2.5.3-RELEASE-GOLDEN-MONOMORPHIC
+ * @version 2.5.4-RELEASE-GOLDEN-MONOMORPHIC-STATE-REDIRECT-FIXED
  * @description Мономорфный посимвольный декодер SGR-пакетов мыши (PAC / Control-контур).
- * ИСПРАВЛЕНА АДРЕСАЦИЯ: Имена регистров синхронизированы со стейтом tty_byte_scanner.js.
+ * ИСПРАВЛЕНА СИНТАКСИЧЕСКАЯ ОШИБКА: Импорт _scannerState перенаправлен на tty_scanner_state.js.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
-import { _scannerState } from "./tty_byte_scanner.js";
+// ИСПРАВЛЕНИЕ: Перенаправляем точку импорта регистра на изолированный стейт-файл
+import { _scannerState } from "./tty_scanner_state.js";
 import { parseAndDispatchSgr } from "./tty_mouse_parser.js";
 
 /**
@@ -15,13 +16,11 @@ import { parseAndDispatchSgr } from "./tty_mouse_parser.js";
  * @param {Object} kernel Ссылка на ОЗУ-рантайм ядра хоста
  */
 export function processSgrMouseState(byte, kernel) {
-    // ИСПРАВЛЕНИЕ: Читаем и мутируем канонический регистр _paramIdx из tty_byte_scanner.js
     if (byte === 0x3b) { 
         _scannerState._paramIdx++; 
         return; 
     }
     
-    // Высокоскоростной посимвольный сбор числовых разрядов координат (Zero Allocation)
     if (byte >= 0x30 && byte <= 0x39) {
         const d = byte - 0x30;
         if (_scannerState._paramIdx === 0) {
@@ -34,16 +33,12 @@ export function processSgrMouseState(byte, kernel) {
         return;
     }
     
-    // Финализирующие маркеры SGR-пакета: 'M' (нажатие/перемещение), 'm' (отпускание)
     if (byte === 0x4d || byte === 0x6d) {
-        // Копируем накопленные примитивы из ОЗУ перед атомарным DOD-сбросом
         const finalBtn = _scannerState.btnCode;
         const finalX = _scannerState.mX;
         const finalY = _scannerState.mY;
         const isReleaseBool = (byte === 0x6d);
 
-        // АТОМАРНЫЙ DOD-СБРОС РЕГИСТРОВ НАКОПЛЕНИЯ ПЕРЕД СЛЕДУЮЩИМ ПРЕРЫВАНИЕМ МЫШИ
-        // Поля стейта очищаются in-place без изменения Hidden Class формы объекта
         _scannerState.state = 0;
         _scannerState.btnCode = 0;
         _scannerState.mX = 0;
@@ -51,16 +46,21 @@ export function processSgrMouseState(byte, kernel) {
         _scannerState._paramIdx = 0;
         _scannerState.isRelease = isReleaseBool;
 
-        // Выстреливаем очищенные и векторизованные координаты в хит-тест флекс-сетки
         if (typeof parseAndDispatchSgr === "function") {
             parseAndDispatchSgr(
                 finalBtn, 
                 finalX, 
                 finalY, 
                 isReleaseBool, 
-                null, // staticSlots изъят как устаревший ООП-артефакт, СМО-приборы налиты в Map
+                null, 
                 kernel
             );
         }
     }
 }
+
+/** 
+ * ПАСПОРТ ЛИСТИНГА:
+ * Путь: src/io/terminal/tty_mouse_decoder.js
+ * Время исправления: 03.09.2026 12:20:10 MSK
+ */

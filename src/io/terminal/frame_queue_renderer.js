@@ -1,18 +1,19 @@
 /**
- * @file: src/io/terminal/frame_queue_renderer.js
- * @path: C:\slotcmd_3\src\io\terminal\frame_queue_renderer.js
- * @version: 3.0.0-RELEASE-DOD-FORK
- * @description: Эталoнный frameRenderer паспорта вью-стека из slotcmd_2 (0% Class).
- * @revision: #0818-FRAME-QUEUE-STRICT-SMO-INDEX
+ * @file src/io/terminal/frame_queue_renderer.js
+ * @version 4.2.0-RELEASE-SMO-FRAME-QUEUE-LEFT-PERFECT
+ * @description Фрейм-рендерер паспорта вью-стека (Presentation-контур).
+ * ИСПРАВЛЕНО СМЕЩЕНИЕ: Паспорт ротации жестко закреплен слева от заголовка (начиная с sX + 1).
+ * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
-export function drawFrameQueueIndicator(row, slotIdStr, displayIndexNum, viewStackPack, currentW, facilityRef) {
+import { packCellBits } from "./sprite_blit.js";
+
+export function drawFrameQueueIndicator(row, sX, slotIdStr, displayIndexNum, viewStackPack, currentW, facilityRef) {
     if (!row) return;
 
     let totalTabs = 1;
     let activeTab = 1;
 
-    // Считываем общее число доступных вкладок из структуры ОЗУ-стека
     if (viewStackPack) {
         if (Array.isArray(viewStackPack)) {
             totalTabs = viewStackPack.length; 
@@ -21,23 +22,28 @@ export function drawFrameQueueIndicator(row, slotIdStr, displayIndexNum, viewSta
         }
     }
 
-    // ИСПРАВЛЕНО: Считываем 1-based индекс активной вкладки напрямую из СМО-прибора
     if (facilityRef) {
         activeTab = Math.max(0, Math.floor(facilityRef.activeStackIdx || 0)) + 1;
     }
 
-    // Строго формируем исторический паттерн: [1: 101 1/2]
-    const stackPassportStr = "[" + displayIndexNum + ": " + slotIdStr + " " + activeTab + "/" + totalTabs + "]";
+    // Собираем канонический левый штамп со стыком рамы "==" один в один по скриншоту
+    const stackPassportStr = "[" + displayIndexNum + ": " + slotIdStr + " " + activeTab + "/" + totalTabs + "]==";
     const pLen = stackPassportStr.length;
 
-    if (currentW > pLen + 4) {
-        const startX = currentW - pLen - 2;
+    if (currentW > pLen + 5) {
+        // Выжигаем строго в начале верхней рамы, сразу после углового символа ╔
+        const startX = sX + 1;
+        const colorAnsi = "\x1b[38;5;244m";
+        const bgColor = "\x1b[40m";
+
         for (let i = 0; i < pLen; i++) {
-            const cell = row[startX + i];
-            if (cell) {
-                cell.char = stackPassportStr.charAt(i);
-                cell.fg = "\x1b[38;5;244m"; 
-            }
+            row[startX + i] = packCellBits(stackPassportStr.charAt(i), colorAnsi, bgColor);
         }
     }
 }
+
+/** 
+ * ПАСПОРТ ЛИСТИНГА:
+ * Путь: src/io/terminal/frame_queue_renderer.js
+ * Время изменения: 04.09.2026 23:14:10 MSK
+ */

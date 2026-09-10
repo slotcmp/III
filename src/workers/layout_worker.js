@@ -1,56 +1,52 @@
 /**
  * @file src/workers/layout_worker.js
- * @version 3.1.0-RELEASE-SMO-LAYOUT-WORKER-PURE-DOD
- * @description Фоновый изолят асинхронного расчета 3-проходной флекс-разметки (VFS / Layout).
- * УНИФИКАЦИЯ: Габариты считываются строго из параметров IPC-задачи, ОЗУ-зеркало зачищается in-place.
- * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
+ * @version 3.2.0-RELEASE-SMO-LAYOUT-WORKER-3-PASSES-CONVERGED
+ * @description Фоновый изолят асинхронного расчета разметки. Сборка полного канонического 3-проходного каскада.
+ * Выполнен в строгой парадигме PAC / DOD / 0% OOP / Zero Allocation / 0% GC.
  */
 
 import { parentPort } from "node:worker_threads";
 import { pass1MeasureConstraints } from "../core/layout/measurer.js";
+import { pass2AdjustFlexLimits } from "../core/layout/flex_expander.js"; // Инжектирован Pass 2
 import { pass3CalculatePositions } from "../core/layout/calculator.js";
-import { balanceGeometryMap } from "../core/layout/layout_balancer.js";
 
-// Абсолютно чистый плоский ОЗУ-регистр для вычисления координат внутри изолята
 const _localThreadGeometryRegistry = Object.create(null);
+const _staticSlotIdsArray = ["100", "101", "102", "103", "105", "106", "108", "main_workspace", "right_sidebar"];
+const _staticIdsCount = _staticSlotIdsArray.length;
 
 if (parentPort) {
     parentPort.on("message", (taskPack) => {
         if (!taskPack || !taskPack.layoutTree) return;
 
         const topologyTree = taskPack.layoutTree;
-        
-        // Прецизионно вытягиваем динамические координаты из входящего СМО-пакета
         const currentW = Math.max(40, Math.floor(taskPack.width || 120));
         const currentH = Math.max(10, Math.floor(taskPack.height || 30));
 
-        // Очищаем локальное ОЗУ-зеркало перед новым проходом калькулятора
-        const keys = Object.keys(_localThreadGeometryRegistry);
-        const lenKeys = keys.length;
-        for (let i = 0; i < lenKeys; i++) {
-            delete _localThreadGeometryRegistry[keys[i]];
+        for (let i = 0; i < _staticIdsCount; i++) {
+            const geoItem = _localThreadGeometryRegistry[_staticSlotIdsArray[i]];
+            if (geoItem) {
+                geoItem.x = 0; geoItem.y = 0; geoItem.w = 0; geoItem.h = 0;
+            }
         }
 
-        // Задаем корень плоской карты
-        _localThreadGeometryRegistry["root"] = { x: 0, y: 0, w: currentW, h: currentH };
+        if (!_localThreadGeometryRegistry["root"]) {
+            _localThreadGeometryRegistry["root"] = { x: 0, y: 0, w: currentW, h: currentH };
+        } else {
+            _localThreadGeometryRegistry["root"].w = currentW;
+            _localThreadGeometryRegistry["root"].h = currentH;
+        }
 
-        // 1. Проход 1: Разворачиваем флекс-проценты в абсолютные ограничения знакомест
+        // ТРЕХПРОХОДНЫЙ ЦИКЛ ПЛАТФОРМЫ SLOTCMP III
+        
+        // Проход 1: Сбор декларативных ограничений из JSON
         pass1MeasureConstraints(topologyTree, currentW, currentH);
 
-        // 2. Проход 3: Расчет финальных экранных координат и налив в ОЗУ-реестр
+        // Проход 2: Вычитание фиксированных и динамический расчет флекс/процентных долей
+        pass2AdjustFlexLimits(topologyTree, currentW, currentH);
+
+        // Проход 3: Финальная трансляция скорректированных лимитов в абсолютные координаты
         pass3CalculatePositions(topologyTree, 0, 0, currentW, currentH, _localThreadGeometryRegistry, null);
 
-        // 3. Балансировка швов (калибровка вертикальной стопки CLI и Логгера)
-        balanceGeometryMap(_localThreadGeometryRegistry, currentH, currentW);
-
-        // Запечатываем элементы перед отправкой через межпоточный мост Windows
-        const calculatedKeys = Object.keys(_localThreadGeometryRegistry);
-        const lenCalc = calculatedKeys.length;
-        for (let i = 0; i < lenCalc; i++) {
-            Object.preventExtensions(_localThreadGeometryRegistry[calculatedKeys[i]]);
-        }
-
-        // Возвращаем СМО-транзакт Фазы Б в главное ядро хоста через IPC-мост
         parentPort.postMessage({
             type: "GEO_MAP_COMPUTED",
             geoMap: _localThreadGeometryRegistry,
@@ -58,9 +54,3 @@ if (parentPort) {
         });
     });
 }
-
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/workers/layout_worker.js
- * Время модификации: 21.08.2026 16:34:05 MSK
- */

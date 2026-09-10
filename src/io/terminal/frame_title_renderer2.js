@@ -27,7 +27,7 @@ export function drawFrameTitle(row, compTypeStr, slotIdStr, currentW, isFocusedB
     else if (displayTitle === "LOGGER") displayTitle = "SYSTEM LOGGER";
 
     // Сборка канонического строкового шаблона рантайма GEN III
-    const titleTextStr = "= [ " + displayTitle + " ] =";
+    const titleTextStr = "[ " + displayTitle + " ]";
     const tLen = titleTextStr.length;
     
     // Защитный гвард: впекаем штамп только если окно физически шире заголовка с отступами

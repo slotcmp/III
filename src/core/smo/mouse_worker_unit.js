@@ -1,18 +1,15 @@
 /**
  * @file src/core/smo/mouse_worker_unit.js
- * @version 3.6.7-RELEASE-SMO-SYSTEM-MOUSE-ALLOCATION-SAFE
- * @description Инфраструктурный системный СМО-прибор Слота 10 (Control-контур).
- * ИСПРАВЛЕН ИНТЕНТ: Адаптирован под прием канонического сигнала MOUSE_INTERRUPT от парсера.
- * Выполнен в строгой парадигме PAC / DOD / 0% OOP.
+ * @version 4.0.1-RELEASE-SMO-SYSTEM-MOUSE-ADMIN-OBVES-FIXED
+ * @description Системный СМО-прибор Слота 10 (Control-контур).
+ * ИСПРАВЛЕНЫ КРАШИ И СКРОЛЛ: Вызов инвалидации переведен на контекст ядра, добавлен перехват Канала 14.
+ * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
 import { generateGpssTransaction, _gpssEngineState } from "./bus.js";
-import { forceInvalidateShadowCanvas } from "../../io/terminal/flusher.js";
 
 /**
  * Фабрика сборки мономорфной структуры системного прибора мыши Слота 10
- * @param {Object} kernelRef Ссылка на ОЗУ-рантайм ядра хоста
- * @returns {Object} Запечатанное состояние прибора
  */
 export function assembleMouseUnit(kernelRef) {
     if (!kernelRef) return null;
@@ -79,14 +76,10 @@ export function advanceMouseQueueFacility(unitState) {
         let localClickX = 0;
         let localClickY = 0;
 
-        // Посимвольный обход исключительно активных интерактивных слотов (100+)
         for (let i = 0; i < activeFacilitiesKeys.length; i++) {
             const slotId = activeFacilitiesKeys[i];
-            
             const slotIdNum = parseInt(slotId, 10);
-            if (isNaN(slotIdNum) || slotIdNum < 100) {
-                continue;
-            }
+            if (isNaN(slotIdNum) || slotIdNum < 100) continue;
             
             const geo = geoMap[slotId];
             if (!geo) continue;
@@ -106,35 +99,86 @@ export function advanceMouseQueueFacility(unitState) {
         }
 
         if (hitSlotIdStr.length > 0) {
-            const currentFocusedId = String(kernel.model.logicalState.focusedSlotId || "");
+            const geo = geoMap[hitSlotIdStr];
+            const w = geo ? Math.floor(geo.w || 0) : 0;
 
+            // =================================================================
+            // ПРЕЦИЗИОННЫЙ ПЕРЕХВАТ ИНФРАСТРУКТУРНОГО ОБВЕСА НА ЛИНИИ Y = 0
+            // =================================================================
+            if (localClickY === 0 && w > 0) {
+                if (localClickX >= 3 && localClickX <= 16) {
+                    generateGpssTransaction("108", "ADD_LOG_ENTRY", "[SYSTEM_WM] Клик по паспорту рамы. Ротация стека Слота: " + hitSlotIdStr + "\n", "10");
+                    generateGpssTransaction(hitSlotIdStr, "ROTATE_SLOT_STACK", null, "10");
+                    isMutated = true;
+                    continue; 
+                }
+
+                const xCollapse = w - 10;
+                const xMaximize = w - 7;
+                const xClose    = w - 4;
+
+                if (localClickX >= xCollapse && localClickX <= xCollapse + 2) {
+                    generateGpssTransaction("108", "ADD_LOG_ENTRY", "[SYSTEM_WM] Инициирован интент COLLAPSE_SLOT на Слот: " + hitSlotIdStr + "\n", "10");
+                    generateGpssTransaction("9", "COLLAPSE_SLOT_TOGGLE", { targetSlotId: hitSlotIdStr }, "10");
+                    isMutated = true;
+                    continue;
+                }
+
+                if (localClickX >= xMaximize && localClickX <= xMaximize + 2) {
+                    generateGpssTransaction("108", "ADD_LOG_ENTRY", "[SYSTEM_WM] Инициирован интент MAXIMIZE_SLOT на Слот: " + hitSlotIdStr + "\n", "10");
+                    generateGpssTransaction("9", "MAXIMIZE_SLOT_TOGGLE", { targetSlotId: hitSlotIdStr }, "10");
+                    isMutated = true;
+                    continue;
+                }
+
+                if (localClickX >= xClose && localClickX <= xClose + 2) {
+                    generateGpssTransaction("108", "ADD_LOG_ENTRY", "[SYSTEM_WM] Инициирован интент DESTROY_SLOT на Слот: " + hitSlotIdStr + "\n", "10");
+                    generateGpssTransaction("0", "DESTROY_SLOT", { targetSlotId: hitSlotIdStr }, "10");
+                    isMutated = true;
+                    continue;
+                }
+            }
+
+            // Переключение фокуса ввода через контекстный метод ядра хоста
+            const currentFocusedId = String(kernel.model.logicalState.focusedSlotId || "");
             if (hitSlotIdStr !== currentFocusedId) {
                 kernel.model.logicalState.focusedSlotId = hitSlotIdStr;
-                
-                if (typeof forceInvalidateShadowCanvas === "function") {
-                    forceInvalidateShadowCanvas();
+                if (kernel && typeof kernel.forceInvalidateShadowCanvas === "function") {
+                    kernel.forceInvalidateShadowCanvas();
                 }
-
-                if (kernel.virtualCanvasState) {
-                    kernel.virtualCanvasState.isDirty = true;
-                }
+                if (kernel.virtualCanvasState) kernel.virtualCanvasState.isDirty = true;
                 
-                generateGpssTransaction("108", "ADD_LOG_ENTRY", "[SYSTEM_MOUSE] Клик перевел фокус ввода на Слот: " + hitSlotIdStr + "\n");
-                generateGpssTransaction("1", "EXECUTE_RENDER", null);
+                generateGpssTransaction("108", "ADD_LOG_ENTRY", "[SYSTEM_MOUSE] Фокус ввода переведен на Слот: " + hitSlotIdStr + "\n", "10");
+                generateGpssTransaction("1", "EXECUTE_RENDER", null, "10");
                 isMutated = true;
             }
 
-            const relativePayload = {
-                globalX: globalX,
-                globalY: globalY,
-                localX: localClickX,
-                localY: localClickY,
-                action: mouseAction
-            };
-            Object.preventExtensions(relativePayload);
+            // Транслируем клик в прикладной контур только если он опустился ниже линии Y=0
+            if (localClickY > 0) {
+                const relativePayload = {
+                    globalX: globalX, globalY: globalY,
+                    localX: localClickX, localY: localClickY,
+                    action: mouseAction
+                };
+                Object.preventExtensions(relativePayload);
 
-            generateGpssTransaction(hitSlotIdStr, mouseAction, relativePayload);
-            isMutated = true;
+                // ИСПРАВЛЕНИЕ: Перехватываем колесико и клики по желобу скроллбара (X === w - 2) на Канал 14
+                const isWheel = (mouseAction === "WHEEL_UP" || mouseAction === "WHEEL_DOWN");
+                const isScrollClick = (mouseAction === "MOUSE_CLICK" && localClickX === w - 2);
+
+                if (isWheel || isScrollClick) {
+                    let scrollIntentStr = "SCROLL_CONTENT_DOWN";
+                    if (isWheel) {
+                        scrollIntentStr = (mouseAction === "WHEEL_UP") ? "SCROLL_CONTENT_UP" : "SCROLL_CONTENT_DOWN";
+                    } else {
+                        scrollIntentStr = (localClickY < Math.floor(geo.h / 2)) ? "SCROLL_CONTENT_UP" : "SCROLL_CONTENT_DOWN";
+                    }
+                    generateGpssTransaction("14", scrollIntentStr, { targetSlotId: hitSlotIdStr, localX: localClickX, localY: localClickY }, "10");
+                } else {
+                    generateGpssTransaction(hitSlotIdStr, mouseAction, relativePayload, "10");
+                }
+                isMutated = true;
+            }
         }
     }
 

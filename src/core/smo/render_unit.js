@@ -1,20 +1,21 @@
 /**
  * @file src/core/smo/render_unit.js
- * @version 3.7.2-RELEASE-SMO-RENDER-FORCED-PROGREW
+ * @version 3.8.2-RELEASE-SMO-RENDER-STRICT-BARRIER
  * @description Системный СМО-прибор Слота 1 (Финальный барьер отрисовки presentación-контура).
- * ИСПРАВЛЕН ЭКСПОРТ: Гарантирован именованный экспорт processSpecificRenderLogic для ESM.
+ * ИСПРАВЛЕН ОТВАЛ РЕСАЙЗА: Ликвидировано асинхронное зацикливание промисов, блокировавшее Event Loop ОС.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP.
  */
 
 import { executeViewportBlit } from "../../io/terminal/blit.js";
 
+// Локальный регистр для защиты от стартового дребезга кадров
+const _renderGateState = {
+    initialSpikeFramesCount: 0
+};
+Object.preventExtensions(_renderGateState);
+
 /**
  * Чистая процедура редукции Слота 1.
- * @param {Object} facilityState Состояние активного инфраструктурного прибора СМО
- * @param {string} intentStr Идентификатор прерывания
- * @param {Object|null} contextPayload Контекст транзакта
- * @param {Object} currentTx Полный паспорт транзакта СМО
- * @returns {boolean} Флаг наличия мутаций рантайма
  */
 export function processSpecificRenderLogic(facilityState, intentStr, contextPayload, currentTx) {
     if (!facilityState) return false;
@@ -22,27 +23,25 @@ export function processSpecificRenderLogic(facilityState, intentStr, contextPayl
     if (!kernel || !kernel.virtualCanvasState) return false;
 
     if (String(intentStr) === "EXECUTE_RENDER") {
-        // Извлекаем уникальный сквозной ID транзакта из паспорта шины СМО
-        const currentTxIdNum = Math.floor(currentTx?.id || 0);
-
-        // ФИНАЛЬНЫЙ ТАКТОВЫЙ БАРЬЕР: Выжигаем кадр, если ОЗУ ядра грязно (isDirty),
-        // ИЛИ если это первый системный пуск платформы (ID транзакта на старте), принудительно пробивая гонки оптимизаций!
-        if (kernel.virtualCanvasState.isDirty === true || currentTxIdNum < 25) {
+        const canvas = kernel.virtualCanvasState;
+        const isDirty = canvas.isDirty === true;
+        
+        // Разрешаем безусловный выжиг кадра на старте ровно 2 раза, далее — строго по isDirty флангу
+        if (isDirty || _renderGateState.initialSpikeFramesCount < 2) {
+            _renderGateState.initialSpikeFramesCount++;
+            
+            // ИСПРАВЛЕНИЕ: Жестко гасим флаг СИНХРОННО до вызова блайтера. 
+            // Это мгновенно освобождает шину и открывает шлюз Event Loop для приема сигналов 'resize' и мыши.
+            canvas.isDirty = false;
             
             if (typeof executeViewportBlit === "function") {
-                executeViewportBlit(kernel.virtualCanvasState, kernel, kernel.calculatedGeoMap);
+                // Запускаем блайтинг кадра пассивно
+                executeViewportBlit(canvas, kernel, kernel.calculatedGeoMap);
             }
             
-            kernel.virtualCanvasState.isDirty = false; // Кадр успешно доставлен в ConPTY, холст чист
             return true;
         }
     }
 
     return false;
 }
-
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/core/smo/render_unit.js
- * Time-stamp: 22.08.2026 07:35:00 MSK
- */

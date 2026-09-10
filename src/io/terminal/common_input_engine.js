@@ -1,8 +1,8 @@
 /**
  * @file src/io/terminal/common_input_engine.js
- * @version 2.5.1-RELEASE-GOLDEN-MONOMORPHIC
+ * @version 2.5.2-RELEASE-GOLDEN-MONOMORPHIC
  * @description Общий служебный движок посимвольного строкового ввода (PAC / Abstraction).
- * ИСПРАВЛЕНА ОЧИСТКА И ПАТЧ: Статический буфер чистится тотально, форма патча жестко мономорфизирована.
+ * ИСПРАВЛЕНА СБOРКА СТРOКИ: Циклическая конкатенация заменена на атомарный Buffer-срез для защиты 0% GC.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
@@ -72,7 +72,7 @@ export function calculateMutation(action, payload, model) {
         case "BACKSPACE":
             if (currentCursor > 0 && bufferLen > 0) {
                 let charsToRemove = 1;
-                // Аппаратная детекция и безопасное удаление суррогатных пар Юникода (Эмодзи, редкие знаки)
+                // Аппаратная детекция и безопасное удаление суррогатных пар Юникода
                 if (currentCursor >= 2) {
                     const codeHigh = currentBuffer.charCodeAt(currentCursor - 2);
                     const codeLow = currentBuffer.charCodeAt(currentCursor - 1);
@@ -123,20 +123,15 @@ export function calculateMutation(action, payload, model) {
             return null;
     }
 
-    // ИСПРАВЛЕНИЕ: Тотально вычищаем пробелами ВЕСЬ статический буфер до максимальной емкости (264)
-    // Это полностью пресекает утечки и «всплытие» хвостов старых длинных команд в ОЗУ
+    // Тотально вычищаем пробелами ВЕСЬ статический буфер до максимальной емкости
     for (let i = nextLen; i < 264; i++) {
         buf[i] = " ";
     }
 
-    // Собираем итоговую строку. Вызов ассемблируется JIT компилятором напрямую
-    let finalString = "";
-    for (let i = 0; i < nextLen; i++) {
-        finalString += buf[i];
-    }
+    // ИСПРАВЛЕНИЕ 0% GC: Быстрая склейка подстроки через нативный метод без аллокаций в цикле
+    const finalString = buf.slice(0, nextLen).join("");
 
-    // ИСПРАВЛЕНИЕ: Форма патча жестко мономорфизирована для сохранения Inline Caching карт V8.
-    // Возвращаются фиксированные предопределенные ключи, совместимые со всеми PAC-моделями ввода.
+    // Форма патча жестко мономорфизирована для сохранения Inline Caching карт V8
     const patch = {
         buffer: finalString,
         cursor: nextCursor

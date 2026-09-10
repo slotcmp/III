@@ -1,45 +1,45 @@
 /**
  * @file src/io/terminal/flusher.js
- * @version 3.3.1-RELEASE-SMO-GRAPHICS-FLUSHER-RESIZE-COMPLIANT
- * @description Дифференциальный TUI-блайтер Double Buffering кадра (Presentation-контур).
- * ИСПРАВЛЕНЫ АЛЛОКАЦИИ И ANSI-ДИФФ: Внедрен сегментный сборщик кадра на преаллоцированном Uint8Array.
- * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
+ * @version 4.0.1-RELEASE-SMO-GRAPHICS-FLUSHER-FIXED
+ * @description Дифференциальный TUI-блайтер Double Buffering кадра с поддержкой распаковки Int32Array.
+ * ИСПРАВЛЕНА СЕГМЕНТАЦИЯ КУРСOРА: Оптимизирован сброс открытого сегмента при пропуске неизмененных ячеек.
+ * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp / 0% GC.
  */
 
 import fs from "node:fs";
+import { unpackCellBits } from "./sprite_blit.js";
 
-// Преаллоцированный буфер вывода кадра на 256 КБ для полного исключения Garbage Collection
 const _staticOutputByteBuffer = new Uint8Array(262144);
+const _staticUtf8TokenBuffer = Buffer.alloc(4);
+
+// Локальный распаковочный DOD-регистр, предотвращающий аллокацию объектов на кадре кадра
+const _localUnpackCellRegister = { char: " ", fg: "", bg: "" };
+Object.preventExtensions(_localUnpackCellRegister);
 
 const _shadowCanvasState = {
     matrix: new Array(64)
 };
 for (let y = 0; y < 64; y++) {
-    _shadowCanvasState.matrix[y] = new Array(512);
+    _shadowCanvasState.matrix[y] = new Int32Array(512);
     for (let x = 0; x < 512; x++) {
-        _shadowCanvasState.matrix[y][x] = { char: " ", fg: "\x1b[37m", bg: "\x1b[40m" };
-        Object.preventExtensions(_shadowCanvasState.matrix[y][x]);
+        _shadowCanvasState.matrix[y][x] = -1; // Принудительный триггер стартовой заливки черным фоном
     }
-    Object.preventExtensions(_shadowCanvasState.matrix[y]);
 }
+Object.preventExtensions(_shadowCanvasState.matrix);
 Object.preventExtensions(_shadowCanvasState);
 
 export function forceInvalidateShadowCanvas() {
     const shadowM = _shadowCanvasState.matrix;
     for (let y = 0; y < 64; y++) {
         const row = shadowM[y];
-        if (!row) continue;
-        for (let x = 0; x < 512; x++) {
-            row[x].char = "\0";
-            row[x].fg = "";
-            row[x].bg = "";
+        if (row) {
+            for (let x = 0; x < 512; x++) {
+                row[x] = -1;
+            }
         }
     }
 }
 
-/**
- * Финализатор блайтинга. Сравнивает холст хоста с теневым ОЗУ-буфером сегментным методом
- */
 export function flushVirtualCanvasToTty(virtualCanvasState, kernel, geoMap) {
     if (!virtualCanvasState || !kernel || !virtualCanvasState.virtualMatrix) return false;
     if (virtualCanvasState.isDirty === false) return false;
@@ -54,71 +54,65 @@ export function flushVirtualCanvasToTty(virtualCanvasState, kernel, geoMap) {
     const buf = _staticOutputByteBuffer;
     let ptr = 0;
 
-    // Векторизованный кэш состояния атрибутов цвета терминала
     let activeAnsiFgStr = "";
     let activeAnsiBgStr = "";
 
     for (let y = 0; y < terminalH; y++) {
-        const cRow = currentM[y];
-        const sRow = shadowM[y];
+        const cRow = currentM[y]; 
+        const sRow = shadowM[y]; 
         if (!cRow || !sRow) continue;
 
         let isSegmentOpen = false;
 
         for (let x = 0; x < terminalW; x++) {
-            const cCell = cRow[x];
-            const sCell = sRow[x];
-            if (!cCell || !sCell) continue;
+            const cPackedBits = cRow[x];
+            const sPackedBits = sRow[x];
 
-            // ДЕТЕКЦИЯ ГРЯЗНОГО ПИКСЕЛЯ
-            if (cCell.char !== sCell.char || cCell.fg !== sCell.fg || cCell.bg !== sCell.bg) {
+            // ДЕТЕКЦИЯ ДЕЛЬТЫ ПИКСЕЛЯ НА УРОВНЕ СРАВНЕНИЯ ДВУХ ЧИСЕЛ
+            if (cPackedBits !== sPackedBits) {
                 
-                // Если сегмент строки закрыт — открываем его и один раз переносим курсор в начало блока
                 if (isSegmentOpen === false) {
                     const posStr = "\x1b[" + (y + 1) + ";" + (x + 1) + "H";
                     for (let i = 0; i < posStr.length; i++) buf[ptr++] = posStr.charCodeAt(i);
                     isSegmentOpen = true;
                 }
 
-                // Инжектируем ESC-коды цвета только при их реальном изменении в потоке
-                if (cCell.fg !== activeAnsiFgStr) {
-                    const fgStr = cCell.fg;
+                unpackCellBits(cPackedBits, _localUnpackCellRegister);
+
+                if (_localUnpackCellRegister.fg !== activeAnsiFgStr) {
+                    const fgStr = _localUnpackCellRegister.fg;
                     for (let i = 0; i < fgStr.length; i++) buf[ptr++] = fgStr.charCodeAt(i);
                     activeAnsiFgStr = fgStr;
                 }
-                if (cCell.bg !== activeAnsiBgStr) {
-                    const bgStr = cCell.bg;
+                if (_localUnpackCellRegister.bg !== activeAnsiBgStr) {
+                    const bgStr = _localUnpackCellRegister.bg;
                     for (let i = 0; i < bgStr.length; i++) buf[ptr++] = bgStr.charCodeAt(i);
                     activeAnsiBgStr = bgStr;
                 }
 
-                // Выжигаем символ UTF-8/ASCII напрямую в байт-массив (поддержка кириллицы через кодовые точки)
-                const charStr = cCell.char;
-                if (charStr.length === 1) {
-                    const code = charStr.charCodeAt(0);
-                    if (code < 128) {
-                        buf[ptr++] = code;
+                const charStr = _localUnpackCellRegister.char;
+                if (charStr.length > 0) {
+                    const primaryCode = charStr.charCodeAt(0);
+                    if (primaryCode < 128 && charStr.length === 1) {
+                        buf[ptr++] = primaryCode;
                     } else {
-                        // Быстрый инлайн-маршалинг кириллических двухбайтовых символов UTF-8
-                        const encodedBuffer = Buffer.from(charStr, "utf8");
-                        for (let i = 0; i < encodedBuffer.length; i++) buf[ptr++] = encodedBuffer[i];
+                        const bytesWritten = _staticUtf8TokenBuffer.write(charStr, 0, "utf8");
+                        for (let i = 0; i < bytesWritten; i++) {
+                            buf[ptr++] = _staticUtf8TokenBuffer[i];
+                        }
                     }
                 } else {
-                    buf[ptr++] = 0x20; // Предохранительный гвард на случай альфа-нулей
+                    buf[ptr++] = 0x20;
                 }
 
-                // СИНХРОНИЗАЦИЯ С ТЕНЕВЫМ БУФЕРОМ
-                sCell.char = cCell.char;
-                sCell.fg = cCell.fg;
-                sCell.bg = cCell.bg;
+                sRow[x] = cPackedBits;
             } else {
-                // Если встретили чистый пиксель — закрываем сегмент непрерывной печати строки
+                // Если пиксель не изменился, закрываем текущую цепочку монолитного вывода
                 isSegmentOpen = false;
             }
         }
     }
 
-    // АТОМАРНЫЙ ВЫЖИГ ВСЕЙ ДЕЛЬТЫ КАДРА ЗА ОДИН СИС-ВЫЗОВ (0% МЕРЦАНИЯ)
     if (ptr > 0) {
         fs.writeSync(1, buf, 0, ptr, null);
     }

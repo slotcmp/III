@@ -1,20 +1,26 @@
 /**
  * @file src/core/smo/loader_unit.js
- * @version 3.7.1-RELEASE-SMO-LOADER-ATOMIC-BARRIER
- * @description IoC-прибор Канала 11 (Control-контур).
- * СИНХРОНИЗАЦИЯ ФАЗ: Атомарный счетчик и генерация сигнала LOAD_SEQUENCE_COMPLETED без try/catch.
+ * @version 4.5.0-RELEASE-SMO-LOADER-ABSTRACT-VIEWS-FINAL
+ * @description IoC-прибор Канала 11.
+ * ИСПРАВЛЕНА СВЯЗЬ ВЬЮХ: Извлечение локальных createViewFn вырезано. Лоадер полностью переведен на абстрактный view_allocator.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP.
  */
 
-import { generateGpssTransaction } from "./bus.js";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { generateGpssTransaction, _gpssEngineState } from "./bus.js";
+import { writeCoreLogMessageInline } from "./logger_io.js";
+import { loadAppSettings } from "../app_config.js";
 
-// Глобальные счетчики Канала 11 для контроля фазы загрузки внутри изолята
+// Импортируем наш единый абстрактный аллокатор вьюх для подстраховки линковки
+import { allocateDomainView } from "../slot_maker/view_allocator.js";
+
 let _totalSlotsToLoadCount = 0;
-let _currentLoadedSlotsCount = 0;
 
-/**
- * Чистая процедура редукции Канала 11
- */
+const _CURRENT_FILE_PATH = fileURLToPath(import.meta.url);
+const _MODULES_ROOT_DIR = path.resolve(path.dirname(_CURRENT_FILE_PATH), "../../modules");
+
 export function processSpecificLoaderLogic(facilityState, intentStr, payload, currentTx) {
     if (!facilityState) return false;
     const kernel = facilityState.host;
@@ -26,17 +32,31 @@ export function processSpecificLoaderLogic(facilityState, intentStr, payload, cu
         const freshTopologyTree = kernel.layoutTopologyTree;
         if (!freshTopologyTree) return false;
 
-        // Сбрасываем тактовые счетчики перед сканированием дерева
         _totalSlotsToLoadCount = 0;
-        _currentLoadedSlotsCount = 0;
 
         const children = freshTopologyTree.children || [];
-        
-        // Пасс 1: Считаем общее количество физических слотов в дереве топологии
         _recursiveCountNodes(children);
+        
+        const config = loadAppSettings();
+        if (!config || config.bAuditTicksBypass !== true) {
+            writeCoreLogMessageInline("[LOAD_SEQUENCE] Найдено прикладных slots для гидратации: " + _totalSlotsToLoadCount + "\n");
+        }
+        
+        if (_totalSlotsToLoadCount === 0) {
+            generateGpssTransaction("0", "LOAD_SEQUENCE_COMPLETED", null, "11");
+            return true;
+        }
 
-        // Пасс 2: Запускаем импорт триад
-        _recursiveScanAndLoadLayoutNodes(kernel, children);
+        const tasksCollectorArray = [];
+        _recursiveScanAndLoadLayoutNodes(kernel, children, tasksCollectorArray);
+        
+        Promise.all(tasksCollectorArray).then(() => {
+            if (!config || config.bAuditTicksBypass !== true) {
+                writeCoreLogMessageInline("[LOAD_SEQUENCE] Все бизнес-слоты успешно гидратированы в шину.\n");
+            }
+            generateGpssTransaction("0", "LOAD_SEQUENCE_COMPLETED", null, "11");
+        });
+
         return true;
     }
 
@@ -49,6 +69,7 @@ function _recursiveCountNodes(childrenArr) {
     for (let i = 0; i < len; i++) {
         const node = childrenArr[i];
         if (!node) continue;
+        
         if (node.type === "slot" && node.id) {
             _totalSlotsToLoadCount++;
         }
@@ -58,7 +79,7 @@ function _recursiveCountNodes(childrenArr) {
     }
 }
 
-function _recursiveScanAndLoadLayoutNodes(kernel, childrenArr) {
+function _recursiveScanAndLoadLayoutNodes(kernel, childrenArr, tasksCollectorArray) {
     if (!childrenArr || !Array.isArray(childrenArr)) return;
     const len = childrenArr.length;
 
@@ -68,9 +89,10 @@ function _recursiveScanAndLoadLayoutNodes(kernel, childrenArr) {
 
         if (node.type === "slot" && node.id) {
             const id = String(node.id);
+            _gpssEngineState.activeSubZonesRegistry[id] = 1;
+
             const comp = String(node.component || "text_panel").trim();
             const dIdx = Math.floor(node.displayIndex || 0);
-
             const ctlFilenameStr = comp + "_ctl.js";
             const viewFilenameStr = comp + "_view.js";
 
@@ -82,61 +104,76 @@ function _recursiveScanAndLoadLayoutNodes(kernel, childrenArr) {
             const registry = kernel.model?.logicalState?.panelRegistry;
             if (registry && !registry[id]) {
                 const blankStruct = {
-                    slotId: id, componentType: comp, displayIndex: dIdx, activeStackIdx: initialActiveIdx,
-                    viewStack: null, advanceFacility: null
+                    slotId: id, 
+                    componentType: comp, 
+                    displayIndex: dIdx, 
+                    activeStackIdx: initialActiveIdx, 
+                    viewStack: null, 
+                    advanceFacility: null,
+                    view: null,
+                    mdl: null
                 };
                 Object.preventExtensions(blankStruct);
                 registry[id] = blankStruct;
             }
 
-            _executeIsolatedImportChain(kernel, id, comp, dIdx, ctlFilenameStr, viewFilenameStr, calculatedW, calculatedH, tabsData, initialActiveIdx);
+            const loadPromise = _executeIsolatedImportChain(
+                kernel, id, comp, dIdx, ctlFilenameStr, viewFilenameStr, 
+                calculatedW, calculatedH, tabsData, initialActiveIdx
+            );
+            tasksCollectorArray.push(loadPromise);
         }
 
         if (node.children && node.children.length > 0) {
-            _recursiveScanAndLoadLayoutNodes(kernel, node.children);
+            _recursiveScanAndLoadLayoutNodes(kernel, node.children, tasksCollectorArray);
         }
     }
 }
 
 async function _executeIsolatedImportChain(kernel, id, comp, dIdx, ctlFile, viewFile, widthNum, heightNum, tabsData, activeIdxNum) {
-    const controllerUrlStr = new URL("../../modules/" + comp + "/" + ctlFile, import.meta.url).href;
-    const mod = await import(controllerUrlStr);
+    const absoluteCtlPath = path.join(_MODULES_ROOT_DIR, comp, ctlFile);
     
-    let specWorkerFn = null;
-    const modKeys = Object.keys(mod);
-    for (let k = 0; k < modKeys.length; k++) {
-        if (modKeys[k].startsWith("processSpecific")) { specWorkerFn = mod[modKeys[k]]; break; }
-    }
+    const controllerUrlStr = pathToFileURL(absoluteCtlPath).href;
 
-    const viewUrlStr = new URL("../../modules/" + comp + "/" + viewFile, import.meta.url).href;
-    const viewMod = await import(viewUrlStr);
-    
-    let createViewFn = null;
-    const viewModKeys = Object.keys(viewMod);
-    for (let v = 0; v < viewModKeys.length; v++) {
-        if (viewModKeys[v].startsWith("create")) { createViewFn = viewMod[viewModKeys[v]]; break; }
-    }
+    try {
+        const mod = await import(controllerUrlStr);
+        let specWorkerFn = null;
+        const modKeys = Object.keys(mod);
+        for (let k = 0; k < modKeys.length; k++) {
+            if (modKeys[k].startsWith("processSpecific")) { specWorkerFn = mod[modKeys[k]]; break; }
+        }
 
-    if (typeof specWorkerFn === "function" && typeof createViewFn === "function") {
-        const syncPayload = {
-            slotId: id, cleanDomain: comp, displayIndex: dIdx, workerFn: specWorkerFn, createViewFn: createViewFn,
-            nodeWidth: widthNum, nodeHeight: heightNum,
-            tabs: tabsData, activeStackIdx: activeIdxNum
-        };
-        Object.preventExtensions(syncPayload);
+        if (typeof specWorkerFn === "function") {
+            // ИСПРАВЛЕНИЕ: Вместо ленивого импорта локальной вьюхи, пробрасываем ссылку на абстрактный allocateDomainView
+            const syncPayload = {
+                slotId: id, 
+                cleanDomain: comp, 
+                displayIndex: dIdx, 
+                workerFn: specWorkerFn, 
+                createViewFn: allocateDomainView, // ЖЕСТКО ГАРАНТИРУЕМ АБСТРАКТНУЮ ФАБРИКУ ЯДРА
+                nodeWidth: widthNum, 
+                nodeHeight: heightNum, 
+                tabs: tabsData, 
+                activeStackIdx: activeIdxNum
+            };
+            Object.preventExtensions(syncPayload);
 
-        generateGpssTransaction("0", "SYNCHRONIZE_DYNAMIC_SLOT", syncPayload);
-        
-        _currentLoadedSlotsCount++;
-        
-        if (_currentLoadedSlotsCount === _totalSlotsToLoadCount) {
-            generateGpssTransaction("0", "LOAD_SEQUENCE_COMPLETED", null);
+            generateGpssTransaction("0", "SYNCHRONIZE_DYNAMIC_SLOT", syncPayload, "11");
+            
+            const config = loadAppSettings();
+            if (!config || config.bAuditTicksBypass !== true) {
+                writeCoreLogMessageInline("[PAC_TRIAD_READY] Успешный IoC-монтаж бизнес-панели | Слот: " + id + "\n");
+            }
+        } else {
+            const config = loadAppSettings();
+            if (!config || config.bAuditTicksBypass !== true) {
+                writeCoreLogMessageInline("[IO_IMPORT_FATAL] Не удалось извлечь контроллер для Слота " + id + "\n");
+            }
+        }
+    } catch (err) {
+        const config = loadAppSettings();
+        if (!config || config.bAuditTicksBypass !== true) {
+            writeCoreLogMessageInline("[IO_IMPORT_CRASH] ФАТАЛЬНЫЙ СБОЙ ЗАГРУЗКИ СЛОТА " + id + " | Ошибка: " + err.message + "\n");
         }
     }
 }
-
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/core/smo/loader_unit.js
- * Time-stamp: 22.08.2026 08:07:00 MSK
- */

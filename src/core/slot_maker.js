@@ -1,120 +1,182 @@
 /**
  * @file src/core/slot_maker.js
- * @version 9.2.0-RELEASE-SMO-IOC-MONOMORPHIC-FIXED
- * @description Синхронный IoC-монтажник PAC-триад приборов на шину СМО (Control-контур).
- * ИСПРАВЛЕНЫ СЛОТЫ 101/106: Массив вкладок выделяется строго для explorer, dashboard изолирован.
- * Выполнен в строгой парадигме PAC / DOD / 0% OOP.
+ * @version 14.2.0-RELEASE-SMO-IOC-MONTAGER-LAZY-FIXED-CASCADE
+ * @description Централизованный upper-level оркестратор сборки и монтажа PAC-триад.
+ * ИСПРАВЛЕН КРАШ EXTENSIONS: Удален преждевременный preventExtensions над глобальным кэшем в шаге.
+ * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
 import { registerGpssFacility } from "./smo/bus.js";
 import { createAbstractFacility } from "./smo/facility_pipeline.js";
+import { allocateDomainMdl } from "./slot_maker/mdl_allocator.js";
+import { allocateDomainView } from "./slot_maker/view_allocator.js";
+import { sealDisplayMatrixShape } from "./slot_maker/shape_sealer.js";
 
-/**
- * Вспомогательный DOD-генератор мономорфных структур моделей данных
- */
-function allocateDomainMdl(componentTypeStr, initialPathStr = "C:/") {
-    const type = String(componentTypeStr || "").trim();
-    const baseMdl = {
-        _isDirty: true, itemsList: [], lines: [], buffer: "", cursor: 0, textLength: 0, cursorX: 0,
-        currentDirectoryPath: String(initialPathStr),
-        _cpuPercent: 35, _ramPercent: 48, _ramUsedMb: 7864, _ramTotalMb: 16384, _cpuCores: 8, totalTransactions: 0,
-        themesList: [
-            { id: 0, name: "1. CLASSIC STEEL", borderColorMsk: "gray" },
-            { id: 1, name: "2. COBALT OCEAN",  borderColorMsk: "blue" },
-            { id: 2, name: "3. AMETHYST NEON", borderColorMsk: "purple" },
-            { id: 3, name: "4. MATRIX OLIVE",  borderColorMsk: "olive" },
-            { id: 4, name: "5. DEEP CRIMSON",  borderColorMsk: "maroon" },
-            { id: 5, name: "6. MIDNIGHT NAVY", borderColorMsk: "navy" }
-        ],
-        totalThemes: 6, selectedIndex: 0, maxLines: 128, logsArray: [], totalLogsCount: 0, viewportOffset: 0,
-        charBuffer: new Array(256)
-    };
-    for (let k = 0; k < 256; k++) baseMdl.charBuffer[k] = " ";
-    if (type === "logger") { for (let i = 0; i < 128; i++) baseMdl.logsArray.push(""); }
-    const lenT = baseMdl.themesList.length;
-    for (let i = 0; i < lenT; i++) Object.preventExtensions(baseMdl.themesList[i]);
-    Object.preventExtensions(baseMdl);
-    return baseMdl;
-}
+// Экспортируем канонический разделяемый реестр для асинхронного роутера кадра
+export const _globalDynamicImportsCache = Object.create(null);
 
-/**
- * ФАЗА 2: Синхронная финализация и атомарный монтаж вью-стека на шину СМО
- */
 export function executeDeferredSynchronization(kernel, payload) {
     if (!kernel || !payload || !payload.slotId || !payload.cleanDomain) return false;
 
     const slotId = payload.slotId;
+    const slotIdNum = parseInt(slotId, 10);
+    if (!isNaN(slotIdNum) && slotIdNum < 100) return false;
+
     const comp = payload.cleanDomain;
     const specificWorkerFn = payload.workerFn;
-    const createViewFn = payload.createViewFn;
+
+    // =================================================================
+    // ПРЕАЛЛОКАЦИЯ КЛЮЧЕЙ ИМПОРТА (РАЗРЕШЕНО, ОБЪЕКТ ЕЩЕ НЕ ЗАПЕЧАТАН)
+    // =================================================================
+    if (_globalDynamicImportsCache[comp] === undefined) {
+        _globalDynamicImportsCache[comp] = undefined;
+    }
 
     const registry = kernel.model?.logicalState?.panelRegistry;
     const targetSlotBlank = registry ? registry[slotId] : null;
 
-    // Сборка канонического абстрактного прибора СМО
     const abstractFacility = createAbstractFacility(kernel, slotId, specificWorkerFn, comp, payload.displayIndex);
     abstractFacility.activeStackIdx = Math.max(0, Math.floor(payload.activeStackIdx || 0));
 
-    // ПРЕЦИЗИОННАЯ АЛЛОКАЦИЯ: Массив вкладок генерируется СТРОГО для файлового менеджера explorer
-    if (comp === "explorer" && payload.tabs && Array.isArray(payload.tabs)) {
+    const rootLayoutNode = kernel.layoutTopologyTree;
+    let currentLayoutNodeRef = null;
+    
+    const findNode = (node) => {
+        if (!node || currentLayoutNodeRef) return;
+        if (String(node.id || "") === String(slotId)) {
+            currentLayoutNodeRef = node;
+            return;
+        }
+        if (node.children && node.children.length > 0) {
+            const cLen = node.children.length;
+            for (let k = 0; k < cLen; k++) findNode(node.children[k]);
+        }
+    };
+    findNode(rootLayoutNode);
+
+    const fallbackNodeMock = currentLayoutNodeRef || { id: slotId, _computedMinW: payload.nodeWidth, _computedMinH: payload.nodeHeight };
+
+    if (payload.tabs && Array.isArray(payload.tabs) && payload.tabs.length > 0) {
         const tabsCount = payload.tabs.length;
         const dynamicTabsStack = new Array(tabsCount);
+        const namesCacheArr = new Array(tabsCount);
         
         for (let idx = 0; idx < tabsCount; idx++) {
+            const tCfg = payload.tabs[idx];
+            let titleStr = String(tCfg && typeof tCfg === "object" ? (tCfg.title || tCfg.name || "") : "");
+            if (titleStr.length === 0) titleStr = "T" + String(idx + 1);
+            namesCacheArr[idx] = titleStr;
+        }
+
+        for (let idx = 0; idx < tabsCount; idx++) {
             const tabConfig = payload.tabs[idx];
-            const tabPath = String(tabConfig?.path || "C:/");
+            const tabPath = String(tabConfig && typeof tabConfig === "object" ? (tabConfig.path || "C:/") : "C:/");
             
-            const tabViewInstance = createViewFn(slotId);
+            const tabViewInstance = allocateDomainView(comp, fallbackNodeMock);
             const tabMdlInstance = allocateDomainMdl(comp, tabPath);
             
+            tabMdlInstance._localTabTitle = namesCacheArr[idx];
+            tabMdlInstance._globalTabsNamesCached = namesCacheArr;
+
+            if (tabViewInstance && tabViewInstance.localBuffer && tabViewInstance.localBuffer.matrix) {
+                sealDisplayMatrixShape(tabViewInstance.localBuffer.matrix);
+            }
+
             dynamicTabsStack[idx] = { 
                 mdl: tabMdlInstance, 
                 view: tabViewInstance,
-                tabTitle: String(tabConfig?.title || "TAB")
+                tabTitle: namesCacheArr[idx]
             };
-            Object.preventExtensions(dynamicTabsStack[idx]);
         }
         abstractFacility.viewStack = dynamicTabsStack;
     } else {
-        // ДЛЯ ВСЕХ ОСТАЛЬНЫХ (Dashboard, CLI, Theme, Logger) — честный плоский struct-конверт
-        const singleViewInstance = createViewFn(slotId);
+        const singleTabsStack = []; 
+        const singleViewInstance = allocateDomainView(comp, fallbackNodeMock);
+        const singleMdlInstance = allocateDomainMdl(comp, "C:/");
+        const singleNameStr = String(comp).toUpperCase();
         
-        abstractFacility.viewStack = { 
-            mdl: allocateDomainMdl(comp, "C:/"), 
-            view: singleViewInstance 
-        };
-        Object.preventExtensions(abstractFacility.viewStack);
-    }
+        const singleCache = [singleNameStr];
+        singleMdlInstance._localTabTitle = singleNameStr;
+        singleMdlInstance._globalTabsNamesCached = singleCache;
 
-    // Накатываем физическую геометрию из IPC-пакета
-    if (Array.isArray(abstractFacility.viewStack)) {
-        for (let t = 0; t < abstractFacility.viewStack.length; t++) {
-            const vObj = abstractFacility.viewStack[t].view;
-            if (vObj) { 
-                vObj.width = Math.floor(payload.nodeWidth); 
-                vObj.height = Math.floor(payload.nodeHeight); 
-            }
+        if (singleViewInstance && singleViewInstance.localBuffer && singleViewInstance.localBuffer.matrix) {
+            sealDisplayMatrixShape(singleViewInstance.localBuffer.matrix);
         }
-    } else if (abstractFacility.viewStack.view) {
-        abstractFacility.viewStack.view.width = Math.floor(payload.nodeWidth);
-        abstractFacility.viewStack.view.height = Math.floor(payload.nodeHeight);
+
+        singleTabsStack.push({
+            mdl: singleMdlInstance,
+            view: singleViewInstance,
+            tabTitle: singleNameStr
+        });
+        abstractFacility.viewStack = singleTabsStack;
     }
 
-    // Легитимная DOD подмена открытых полей запечатанного бланка
+    for (let t = 0; t < abstractFacility.viewStack.length; t++) {
+        const vObj = abstractFacility.viewStack[t].view;
+        if (vObj) { 
+            vObj.width = Math.floor(fallbackNodeMock._computedMinW); 
+            vObj.height = Math.floor(fallbackNodeMock._computedMinH); 
+        }
+    }
+
     if (targetSlotBlank) {
         targetSlotBlank.viewStack = abstractFacility.viewStack;
         targetSlotBlank.advanceFacility = abstractFacility.advanceFacility;
         targetSlotBlank.activeStackIdx = abstractFacility.activeStackIdx;
+
+        const activeIdxNum = Math.floor(abstractFacility.activeStackIdx || 0);
+        const currentActivePack = abstractFacility.viewStack[activeIdxNum];
+        
+        if (currentActivePack) {
+            targetSlotBlank.view = currentActivePack.view;
+            targetSlotBlank.mdl = currentActivePack.mdl;
+            abstractFacility.view = currentActivePack.view;
+            abstractFacility.mdl = currentActivePack.mdl;
+        }
     }
 
-    // Монтируем прибор на шину СМО
+    _deepSealFacilityStructure(abstractFacility);
     registerGpssFacility(slotId, abstractFacility);
     return true;
+}
+
+function _deepSealFacilityStructure(facility) {
+    if (!facility) return;
+    const stack = facility.viewStack;
+    if (Array.isArray(stack)) {
+        const len = stack.length;
+        for (let i = 0; i < len; i++) {
+            const pack = stack[i];
+            if (!pack) continue;
+            if (pack.mdl) {
+                if (Array.isArray(pack.mdl._globalTabsNamesCached) && Object.isExtensible(pack.mdl._globalTabsNamesCached)) {
+                    Object.preventExtensions(pack.mdl._globalTabsNamesCached);
+                }
+                Object.preventExtensions(pack.mdl);
+            }
+            if (pack.view) {
+                if (pack.view.localBuffer) Object.preventExtensions(pack.view.localBuffer);
+                Object.preventExtensions(pack.view);
+            }
+            Object.preventExtensions(pack);
+        }
+        Object.preventExtensions(stack);
+    }
+    Object.preventExtensions(facility);
+}
+
+/**
+ * ИСПРАВЛЕНИЕ: Вынесенная суверенная процедура окончательной заморозки кэша импортов.
+ * Должна вызываться один раз из src/main.js или bootstrap.js ПОСЛЕ завершения LOAD_SEQUENCE_COMPLETED.
+ */
+export function finalSealingOfDynamicImportsRegistry() {
+    if (Object.isExtensible(_globalDynamicImportsCache)) {
+        Object.preventExtensions(_globalDynamicImportsCache);
+    }
 }
 
 /** 
  * ПАСПОРТ ЛИСТИНГА:
  * Путь: src/core/slot_maker.js
- * Время модификации: 21.08.2026 20:22:15 MSK
+ * Время модификации: 09.09.2026 13:49:12 MSK
  */
-    

@@ -1,38 +1,39 @@
 /**
  * @file src/modules/command/command_mdl.js
- * @version 3.0.0-RELEASE-DOD-FORK
- * @description Мономорфная модель командной строки (PAC / Abstraction-контур).
- * Выполняет супер-прогрев регистров текстового буфера для кэш-локальности V8.
- * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
+ * @version 5.0.0-RELEASE-SMO-COMMAND-MDL-TOTALCMD-COMPLIANT
+ * @description Стерильная модель командной строки с регистрами Totalcmd-дополнения и истории.
+ * Выполнен в строгой парадигме PAC / DOD / 0% OOP / Zero Allocation.
  */
 
-/**
- * Фабрика аллокации запечатанного мономорфного состояния CLI-модели
- * @returns {Object} Запечатанный объект состояния модели
- */
 export function createCommandMdlInstance() {
     const mdlState = {
-        _isDirty: false,
+        _isDirty: true,
         textLength: 0,
         cursorX: 0,
         charBuffer: new Array(256),
-        
-        // СУПЕР-ПРОГРЕВ: Поля явно объявлены на фазе аллокации до preventExtensions
         buffer: "",
-        cursor: 0
+        cursor: 0,
+
+        // РЕГИСТРЫ ИСТОРИИ КОМАНД (32 СТРОКИ)
+        historyBuffer: null, // Ссылка на преаллоцированный массив из app_config
+        historyCount: 0,
+        historyCursor: 0,
+        stashBuffer: "",     // Буфер для сохранения недописанной строки при прокрутке истории
+
+        // РЕГИСТРЫ TOTALCMD-АВТОДОПОЛНЕНИЯ (ROUND ROBIN ПО Tab)
+        _tabCompletionActive: false,
+        _matchEntriesArray: new Array(64), // Буфер ссылок на совпавшие имена файлов/директорий
+        _matchCount: 0,
+        _matchCurrentIdx: 0,
+        _completionBaseLen: 0 // Длина недописанного слова до нажатия Tab
     };
 
-    // Заполняем символьный буфер пустыми знакоместами
     for (let i = 0; i < 256; i++) {
         mdlState.charBuffer[i] = " ";
     }
+    for (let i = 0; i < 64; i++) {
+        mdlState._matchEntriesArray[i] = "";
+    }
 
-    Object.preventExtensions(mdlState);
     return mdlState;
 }
-
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/modules/command/command_mdl.js
- * Время модификации: 18.08.2026 17:25:10 MSK
- */

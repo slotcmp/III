@@ -1,37 +1,33 @@
 /**
  * @file src/io/terminal/frame_geo_renderer.js
- * @version 3.0.0-RELEASE-DOD-FORK
+ * @version 4.0.0-RELEASE-SMO-FRAME-GEO-TYPED
  * @description Чистый пассивный отрисовщик геометрических паспортов слотов (Presentation-контур).
- * Выводит габариты знакомест и строк на нижнее ребро рамы прибора СМО.
+ * ИСПРАВЛЕН КРАШ: Переведен на прямое выжигание Int32 бит через packCellBits.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
+import { packCellBits } from "./sprite_blit.js";
+
 /**
- * Выводит текстовый штамп геометрии слота на нижнюю линию рамки
- * @param {Object[]} row Ссылка на плоский массив ячеек нижней строки матрицы
- * @param {number} currentW Текущая физическая ширина слота в знакоместах
- * @param {number} currentH Текущая физическая высота слота в строках
+ * Выводит текстовый штамп геометрии слота на нижнюю линию рамки кадра
+ * @param {Int32Array} row Ссылка на числовую строку нижней рамы
+ * @param {number} sX Начальное смещение окна по оси X
+ * @param {number} currentW Текущая физическая ширина слота
+ * @param {number} currentH Текущая физическая высота слота
  */
-export function drawFrameGeoPassport(row, currentW, currentH) {
+export function drawFrameGeoPassport(row, sX, currentW, currentH) {
     if (!row) return;
 
     const geoTextStr = " [" + currentW + "x" + currentH + "] ";
     const gLen = geoTextStr.length;
     
-    if (currentW > gLen + 2) {
-        const startG_X = currentW - gLen - 2;
+    if (currentW > gLen + 6) {
+        const startG_X = sX + currentW - gLen - 2;
+        const colorAnsi = "\x1b[38;5;242m";
+        const bgColor = "\x1b[40m";
+
         for (let i = 0; i < gLen; i++) {
-            const cell = row[startG_X + i];
-            if (cell) {
-                cell.char = geoTextStr.charAt(i);
-                cell.fg = "\x1b[38;5;242m"; 
-            }
+            row[startG_X + i] = packCellBits(geoTextStr.charAt(i), colorAnsi, bgColor);
         }
     }
 }
-
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/io/terminal/frame_geo_renderer.js
- * Время модификации: 18.08.2026 18:07:05 MSK
- */

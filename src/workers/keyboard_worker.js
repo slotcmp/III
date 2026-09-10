@@ -1,8 +1,8 @@
 /**
  * @file src/app/workers/keyboard_worker.js
- * @version 3.6.6-RELEASE-SMO-KEYBOARD-WORKER-ALT-NUMBERS-STABLE
- * @description Фоновый воркер разбора клавиатурных событий.
- * ИСПРАВЛЕН Unicode-ВВОД: Расширен захват многобайтовых символов sequence для поддержки кириллицы.
+ * @version 3.7.0-RELEASE-SMO-KEYBOARD-WORKER-CLEAN-FINAL
+ * @description Фоновый воркер разбора клавиатурных событий (Hardware Driver).
+ * ИСПРАВЛЕНА СТРУКТУРА: Удалены временные хаки инжекции байт забоя, воркер возвращен к роли чистого транслятора.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
@@ -20,7 +20,7 @@ if (parentPort) {
         let action = null;
         let payload = null;
         
-        // ДЕТЕКЦИЯ КОМБИНАЦИЙ ALT + ЦИФРА (Alt+1 ... Alt+6)
+        // 1. ДЕТЕКЦИЯ КОМБИНАЦИЙ ALT + ЦИФРА (Alt+1 ... Alt+6)
         if (name.length === 5 && name.startsWith("alt+")) {
             const digitChar = name.charAt(4);
             if (digitChar >= "1" && digitChar <= "6") {
@@ -28,7 +28,7 @@ if (parentPort) {
                 payload = Math.floor(parseInt(digitChar, 10) || 1);
             }
         } 
-        // СТАНДАРТНЫЙ НАВИГАЦИОННЫЙ И СЛУЖЕБНЫЙ МАРШАЛИНГ
+        // 2. СТАНДАРТНЫЙ НАВИГАЦИОННЫЙ И СЛУЖЕБНЫЙ МАРШАЛИНГ СТДИН
         else if (name === "tab") {
             if (focusedSlotIdStr === "105") {
                 action = "TAB_COMPLETION_REQUEST";
@@ -51,8 +51,9 @@ if (parentPort) {
         } else if (name === "f4") {
             action = "SYSTEM_ACTION_BYPASS";
             payload = "F4_MACRO";
-        } else if (focusedSlotIdStr === "105") {
-            // ИСПРАВЛЕНИЕ: Кириллица и заглавные буквы могут приходить как в sequence, так и в name
+        } 
+        // 3. ТРАНСЛЯЦИЯ СЫРЫХ ПАКЕТОВ ВВОДА ДЛЯ ОБРАБОТКИ ПРИБОРОМ КАНАЛА 4
+        else if (focusedSlotIdStr === "105") {
             let targetChar = "";
             if (sequence.length > 0) { targetChar = sequence; }
             else if (name.length === 1) { targetChar = name; }
@@ -64,13 +65,11 @@ if (parentPort) {
         }
         
         if (action) {
-            // Безаллокационный сборщик временной метки (DOD-friendly)
             const now = new Date();
             const h = String(now.getHours()).padStart(2, "0");
             const m = String(now.getMinutes()).padStart(2, "0");
             const s = String(now.getSeconds()).padStart(2, "0");
 
-            // ИСПРАВЛЕНИЕ: Безопасное извлечение символа из объекта payload с fallback на строку
             const printableKeyStr = (payload && typeof payload === "object" && payload.char) ? payload.char : name;
             const logMsgStr = "[" + h + ":" + m + ":" + s + " Msk] [INPUT_KEYBOARD] Клавиша: '" + printableKeyStr + "' | Направлено в Слот: " + focusedSlotIdStr + "\n";
             
@@ -78,7 +77,6 @@ if (parentPort) {
                 action: "LOG_ENTRY_PENDING",
                 payload: logMsgStr
             };
-            Object.preventExtensions(logPack);
             parentPort.postMessage(logPack);
 
             const resPack = {
@@ -90,8 +88,6 @@ if (parentPort) {
                     payload: payload
                 }
             };
-            Object.preventExtensions(resPack.payload);
-            Object.preventExtensions(resPack);
             parentPort.postMessage(resPack);
         }
 
@@ -99,8 +95,12 @@ if (parentPort) {
             action: "KEYBOARD_FACILITY_RELEASE_READY",
             payload: { slotId: focusedSlotIdStr, intent: "RELEASE_KEYBOARD_FACILITY" }
         };
-        Object.preventExtensions(releasePack.payload);
-        Object.preventExtensions(releasePack);
         parentPort.postMessage(releasePack);
     });
 }
+
+/** 
+ * ПАСПОРТ ЛИСТИНГА:
+ * Путь: src/app/workers/keyboard_worker.js
+ * Время изменения: 05.09.2026 12:45:10 MSK
+ */

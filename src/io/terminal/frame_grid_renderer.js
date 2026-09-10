@@ -1,17 +1,15 @@
 ﻿/**
  * @file src/io/terminal/frame_grid_renderer.js
- * @version 3.3.3-RELEASE-SMO-FRAME-GRID-LAZY-COMPLIANT
+ * @version 3.7.0-RELEASE-SMO-FRAME-GRID-STRICT-SAFE-ZONE
  * @description Модуль координатной отрисовки фоновых СМО-маркеров знакомест прибора.
- * ИСПРАВЛЕНА ОЧИСТКА: Границы очистки локализованы внутри рамок, предотвращая деструктивный затир контента.
- * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
+ * ИСПРАВЛЕНО ПЕРЕТИРАНИЕ: Внутренний обход ограничен по Y с 2 до h-2, по X до w-3, защищая табы и скролл.
+ * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp / Zero Allocation.
  */
 
+import { packCellBits } from "./sprite_blit.js";
+
 /**
- * Заполняет внутреннюю область прибора фоновой координатной сеткой знакомест
- * @param {Array[]} matrix Плоская мономорфная UHD-матрица знакомест прибора
- * @param {number} currentW Текущая флекс-ширина прибора в знакоместах
- * @param {number} currentH Текущая флекс-высота прибора в строках
- * @param {boolean} isFocusedBool Флаг активности/фокуса панели в интерфейсе
+ * Заполнитель фоновой координатной сетки знакомест с учетом суверенного желоба скроллбара
  */
 export function drawFrameGrid(matrix, currentW, currentH, isFocusedBool) {
     if (!matrix) return;
@@ -19,34 +17,45 @@ export function drawFrameGrid(matrix, currentW, currentH, isFocusedBool) {
     const maxCols = Math.max(1, Math.floor(currentW || 40));
     const maxRows = Math.max(1, Math.floor(currentH || 5));
     
-    // Динамический подбор приглушенного цвета подложки (Xterm-256)
+    // Если окно слишком маленькое — сетка пассивно засыпает, чтобы не ломать структуру
+    if (maxCols < 6 || maxRows < 5) return;
+
     const gridColorAnsi = isFocusedBool ? "\x1b[38;5;236m" : "\x1b[38;5;234m";
     const bgColorAnsi = "\x1b[40m";
 
-    // ИСПРАВЛЕНИЕ: Обход и подготовка холста ведутся строго ВНУТРИ рамок (от 1 до max - 1)
-    // Это исключает повреждение геометрии оконных границ и затирку заголовков слотов
-    for (let y = 1; y < maxRows - 1; y++) {
+    const packedDotBits   = packCellBits("·", gridColorAnsi, bgColorAnsi);
+    const packedSpaceBits = packCellBits(" ", "\x1b[37m", bgColorAnsi);
+
+    // ИСПРАВЛЕНИЕ: Начинаем строго с y = 2 (строка под табами) и заканчиваем за одну строку до нижней рамки
+    for (let y = 2; y < maxRows - 1; y++) {
         const row = matrix[y];
         if (!row) continue;
         
-        for (let x = 1; x < maxCols - 1; x++) {
-            const cell = row[x];
-            if (!cell) continue;
+        // ИСПРАВЛЕНИЕ: Правый край жестко ограничен до maxCols - 3, защищая желоб скроллбара и рамку ║
+        for (let x = 1; x < maxCols - 2; x++) {
+            const currentPackedVal = row[x];
+            const charCode = (currentPackedVal >> 16) & 0xFFFF;
+
+            // Если в ячейке уже записан честный бизнес-контент (буквы файлов, логов, шкалы),
+            // пропускаем шаг, не затирая данные точками сетки
+            if (charCode !== 0x20 && charCode !== 0x00 && charCode !== 0xB7) {
+                continue;
+            }
             
-            // Расчет локального шага подложки относительно внутреннего пространства
             const localX = x - 1;
-            const localY = y - 1;
+            const localY = y - 2; // Смещение относительно начала сетки
 
             if (localY % 2 === 0 && localX % 4 === 0) {
-                cell.char = "·";
-                cell.fg = gridColorAnsi;
-                cell.bg = bgColorAnsi;
+                row[x] = packedDotBits;
             } else {
-                // Чистим только некратные ячейки контента от альфа-нулей
-                cell.char = " ";
-                cell.fg = "\x1b[37m";
-                cell.bg = bgColorAnsi;
+                row[x] = packedSpaceBits;
             }
         }
     }
 }
+
+/** 
+ * ПАСПОРТ ЛИСТИНГА:
+ * Путь: src/io/terminal/frame_grid_renderer.js
+ * Время изменения: 04.09.2026 23:18:22 MSK
+ */

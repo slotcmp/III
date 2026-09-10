@@ -1,84 +1,58 @@
 /**
  * @file src/modules/theme/theme_view.js
- * @version 3.0.1-RELEASE-DOD-FORK
- * @description Пассивное TUI-представление Панели Тем (Presentation-контур).
- * ИСПРАВЛЕНЫ ИНДЕКСЫ: Ограничен диапазон вывода для защиты нижних рамок от затирания контентом.
+ * @version 3.2.1-RELEASE-SMO-THEME-VIEW-Z3-TAB-FIXED
+ * @description Пассивный процедурный отрисовщик TUI-строк палитр Слота 106.
+ * ИСПРАВЛЕН СДВИГ ВКЛАДКИ: Отрисовка таба PALETTE полностью делегирована слою Z-3.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
+import { prepareGenericTuiLayout } from "../../io/terminal/generic_tui_layout.js";
+import { drawFrameGrid } from "../../io/terminal/frame_grid_renderer.js";
 import { drawThemeItem } from "./theme_item_renderer.js";
 
 /**
- * Фабрика выделения локального запечатанного TUI-буфера отображения панели тем
- * @param {string} slotIdStr Идентификатор целевой панели
- * @returns {Object} Запечатанная мономорфная структура представления
+ * Унифицированная процедура рендеринга контента Панели Тем
  */
-export function createThemeViewInstance(slotIdStr) {
-    const viewState = {
-        slotId: String(slotIdStr || "106"),
-        width: 36,
-        height: 16,
-        _isFocused: false,
-        localBuffer: { matrix: null }
-    };
+export function renderContent(matrix, currentW, currentH, mdl, activeTabIdx, slotIdStr, viewStack) {
+    if (!matrix || !mdl) return;
 
-    const m = new Array(64);
-    for (let y = 0; y < 64; y++) {
-        m[y] = new Array(512);
-        for (let x = 0; x < 512; x++) {
-            m[y][x] = { char: " ", fg: "\x1b[37m", bg: "\x1b[40m" };
-            Object.preventExtensions(m[y][x]);
-        }
-        Object.preventExtensions(m[y]);
-    }
-    
-    viewState.localBuffer.matrix = m;
-    Object.preventExtensions(viewState.localBuffer);
-    Object.preventExtensions(viewState);
-    return viewState;
-}
+    const w = Math.floor(currentW || 40);
+    const h = Math.floor(currentH || 15);
 
-/**
- * Синхронный накат списка тем на плоские строки ОЗУ-матрицы прибора
- * @param {Object} view Ссылка на буфер отображения прибора
- * @param {Object} mdl Ссылка на мономорфную модель данных палитр
- */
-export function renderThemeContent(view, mdl) {
-    if (!view || !mdl || !view.localBuffer.matrix) return;
+    // 1. Извлекаем кэшированный плоский массив имен вкладок
+    const titles = mdl._globalTabsNamesCached || ["PALETTE"];
 
-    const m = view.localBuffer.matrix;
-    const currentW = Math.max(1, Math.floor(view.width || 36));
-    const currentH = Math.max(1, Math.floor(view.height || 16));
+    // 2. ИСПРАВЛЕНИЕ: Передаем false (7-й аргумент) для флага табов. 
+    // Шаблонизатор просто очистит строку, а накат плашки PALETTE выполнит Z-3 редьюсер.
+    prepareGenericTuiLayout(matrix, w, h, mdl, titles, activeTabIdx, false, slotIdStr, true);
 
-    // Очищаем рабочую область контента строго внутри двойных рам
-    for (let y = 1; y < currentH - 1; y++) {
-        const row = m[y];
-        if (!row) continue;
-        for (let x = 1; x < currentW - 1; x++) {
-            row[x].char = " "; 
-            row[x].fg = "\x1b[37m"; 
-            row[x].bg = "\x1b[40m";
-        }
-    }
+    // 3. Накатываем координатную сетку знакомест с защитой желоба скроллбара
+    drawFrameGrid(matrix, w, h, true);
 
-    const list = mdl.themesList || [];
-    const len = list.length;
-    
-    // ИСПРАВЛЕНИЕ: maxVisibleRows жестко ограничена (currentH - 3), чтобы targetRowY не наступал на h - 1
-    const maxVisibleRows = Math.min(len, currentH - 3);
+    // 4. Построчный безаллокационный вывод тем из JSON с Y = 3
+    const themes = mdl.themesList || [];
+    const total = Math.floor(mdl.totalThemes || 0);
+    const selected = Math.floor(mdl.selectedIndex || 0);
 
-    for (let i = 0; i < maxVisibleRows; i++) {
-        const themeItem = list[i];
-        
-        // Начало отрисовки контента с Y = 1 (первая строка внутри рамки)
-        const targetRowY = 1 + i; 
-        const row = m[targetRowY];
+    // Вычисляем физический лимит строк контента
+    const maxVisibleRows = Math.max(1, h - 4);
+    const printCount = Math.min(total, maxVisibleRows);
+
+    for (let i = 0; i < printCount; i++) {
+        const rowLineIdx = 3 + i;
+        const row = matrix[rowLineIdx];
+        const themeItem = themes[i];
 
         if (row && themeItem) {
-            const isSelected = (i === Math.floor(mdl.selectedIndex || 0));
-
-            // ВЫЗОВ ВНЕШНЕГО СТАТИЧЕСКОГО СТРОКОВОГО РЕНДЕРЕРА
-            drawThemeItem(row, themeItem, currentW, isSelected);
+            const isSelected = (i === selected);
+            // Вызываем пассивный атомарный отрисовщик строки темы
+            drawThemeItem(row, themeItem, w, isSelected);
         }
     }
 }
+
+/** 
+ * ПАСПОРТ ЛИСТИНГА:
+ * Путь: src/modules/theme/theme_view.js
+ * Время исправления: 09.09.2026 14:35:10 MSK
+ */

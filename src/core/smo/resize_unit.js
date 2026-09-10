@@ -1,32 +1,21 @@
 ﻿/**
  * @file src/core/smo/resize_unit.js
- * @version 3.5.5-RELEASE-SMO-RESIZE-PIPELINE-SAFE
+ * @version 3.9.0-RELEASE-SMO-RESIZE-REALIGNMENT-CONNECTED
  * @description Модуль обслуживания Фазы 1-3 СМО (Прибор Канала 9 / resize_unit).
- * ИСПРАВЛЕН КРАШ V8: Мутации ширины перенаправлены на открытые регистры геометрии ядра хоста.
+ * ИСПРАВЛЕНА ПУСТОТА ОКOН: Интегрирован вызов realignAllActiveViewBuffers для реактивной нарезки Int32Array буферов.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
-import fs from "node:fs";
-import { generateGpssTransaction, _kernelContext } from "./bus.js";
+import { generateGpssTransaction } from "./bus.js";
 import { forceInvalidateShadowCanvas } from "../../io/terminal/flusher.js";
+import { writeCoreLogMessageInline } from "./logger_io.js";
 
-/**
- * Превентивный гвард для безопасной записи метрик геометрии в лог
- * @param {string} messageStr Сформированная строка лога
- */
-function appendGeoMetricsLogGuard(messageStr) {
-    const targetLogPath = _kernelContext.logPath;
-    if (!targetLogPath) return;
-    fs.appendFileSync(targetLogPath, messageStr, "utf8");
-}
+// Импортируем наш размоноличенный DOD-очиститель координат и выравниватель буферов вьюх
+import { clearDirtyGeometryRegistry } from "../layout/balancer/geo_cleaner.js";
+import { realignAllActiveViewBuffers } from "../layout/layout_balancer.js"; // Инжектируем выравниватель
 
 /**
  * Фазовый СМО-фильтр супершины прерываний для Прибора Канала 9 (Resize)
- * @param {Object} facilityState Состояние активного инфраструктурного прибора СМО
- * @param {string} intentStr Идентификатор прерывания (TRIGGER_RESIZE или INJECT_GEO_MAP)
- * @param {Object} contextPayload Контекст транзакта (метрики консоли или скомпилированная карта)
- * @param {Object} currentTx Полный паспорт транзакта СМО
- * @returns {boolean} Флаг наличия мутаций рантайма для взвода IsDirty
  */
 export function processSpecificResizeLogic(facilityState, intentStr, contextPayload, currentTx) {
     if (!facilityState) return false;
@@ -37,12 +26,10 @@ export function processSpecificResizeLogic(facilityState, intentStr, contextPayl
     const intent = String(intentStr || "");
     const ctx = contextPayload;
 
-    // ФАЗА А: ПРЕРЫВАНИЕ ТЕРМИНАЛА (ОС ИЗМЕНИЛА ФИЗИЧЕСКИЕ РАЗМЕРЫ ОКНА)
-    if (intent === "TRIGGER_RESIZE" && ctx) {
-        const targetW = Math.max(40, Math.floor(ctx.w || 120));
-        const targetH = Math.max(10, Math.floor(ctx.h || 30));
+    if ((intent === "TRIGGER_RESIZE" || intent === "FORCE_RECALCULATE_LAYOUT") && ctx) {
+        const targetW = Math.max(40, Math.floor(ctx.w || ctx.width || kernel.width || 120));
+        const targetH = Math.max(10, Math.floor(ctx.h || ctx.height || kernel.height || 30));
         
-        // Пишем строго в базовые регистры ядра, инициализированные при старте index.js
         kernel.width = targetW; 
         kernel.height = targetH;
         
@@ -52,35 +39,56 @@ export function processSpecificResizeLogic(facilityState, intentStr, contextPayl
         }
         
         if (kernel.workerGateway && typeof kernel.workerGateway.triggerGeometryCalculation === "function") {
-            const layoutTree = kernel.model?.layoutTree || kernel.layoutTopologyTree;
+            const layoutTree = kernel.layoutTopologyTree || kernel.model?.layoutTree;
             const settingsObj = kernel.model?.logicalState?.appSettings;
-            kernel.workerGateway.triggerGeometryCalculation(layoutTree, targetW, targetH, settingsObj, currentTx.id);
+            
+            const txId = currentTx ? currentTx.id : 0;
+            kernel.workerGateway.triggerGeometryCalculation(layoutTree, targetW, targetH, settingsObj, txId);
         }
         return true; 
     } 
     
-    // ФАЗА Б: ИНЖЕКЦИЯ СКОМПИЛИРОВАННОЙ КАРТЫ ОТ ВОРКЕРА ГЕОМЕТРИИ
+    // =================================================================
+    // ИСПРАВЛЕННЫЙ КОНТУР ИНЖЕКЦИИ КООРДИНАТ С ИСКЛЮЧЕНИЕМ ДУБЛИКАТОВ
+    // =================================================================
     if (intent === "INJECT_GEO_MAP" && ctx) {
+        // 1. Намертво выжигаем старые Ghost-координаты в ОЗУ-карте ядра перед обновлением
+        if (kernel.calculatedGeoMap) {
+            clearDirtyGeometryRegistry(kernel.calculatedGeoMap);
+        } else if (kernel.model?.logicalState?.calculatedGeoMap) {
+            clearDirtyGeometryRegistry(kernel.model.logicalState.calculatedGeoMap);
+        }
+
+        // 2. Накатываем свежую, пересчитанную воркером геометрию сетки
         if (typeof kernel.updateGeometryMap === "function") {
             kernel.updateGeometryMap(ctx);
         }
+
+        // =================================================================
+        // РЕАКТИВНОЕ ВЫРАВНИВАНИЕ БУФЕРОВ ОТОБРАЖЕНИЯ ПОСЛЕ ИНЖЕКЦИИ КАРТЫ
+        // =================================================================
+        // Перенарезаем Int32Array-строки вьюх под живые габариты, исключая Out of Bounds блокировки
+        realignAllActiveViewBuffers(kernel);
         
         if (typeof forceInvalidateShadowCanvas === "function") {
             forceInvalidateShadowCanvas();
         }
 
+        if (kernel.virtualCanvasState) {
+            kernel.virtualCanvasState.isDirty = true;
+        }
+
         const now = new Date();
-        const h = String(now.getHours()).padStart(2, "0");
-        const m = String(now.getMinutes()).padStart(2, "0");
-        const s = String(now.getSeconds()).padStart(2, "0");
         const rootGeo = ctx["root"] || { w: 120, h: 30 };
         
-        const geoMetricsLineStr = "[" + h + ":" + m + ":" + s + " Msk] [СМО_LAYOUT] Геометрия TUI пересчитана воркером: W=" + 
+        const geoMetricsLineStr = "[" + String(now.getHours()).padStart(2, "0") + ":" + 
+                                  String(now.getMinutes()).padStart(2, "0") + ":" + 
+                                  String(now.getSeconds()).padStart(2, "0") + " Msk] [СМО_LAYOUT] Геометрия TUI пересчитана воркером: W=" + 
                                   Math.floor(rootGeo.w) + " знакомест | H=" + Math.floor(rootGeo.h) + " строк\n";
         
-        appendGeoMetricsLogGuard(geoMetricsLineStr);
-
+        writeCoreLogMessageInline(geoMetricsLineStr);
         generateGpssTransaction("108", "ADD_LOG_ENTRY", geoMetricsLineStr);
+        
         generateGpssTransaction("1", "EXECUTE_RENDER", null);
         return true; 
     }
@@ -91,5 +99,5 @@ export function processSpecificResizeLogic(facilityState, intentStr, contextPayl
 /** 
  * ПАСПОРТ ЛИСТИНГА:
  * Путь: src/core/smo/resize_unit.js
- * Время модификации: 21.08.2026 17:09:20 MSK
+ * Время изменения: 05.09.2026 21:04:12 MSK
  */

@@ -1,73 +1,56 @@
 /**
  * @file src/modules/dashboard/ruler_view.js
- * @version 2.5.3-RELEASE-GOLDEN-MONOMORPHIC
- * @description Суб-представление Дашборда Линейки (0% RegExp, No BOM, 0% Class).
- * ИСПРАВЛЕНЫ ИНДЕКСЫ БУФЕРА: Восстановлен канонический синтаксис обращения к Uint8Array.
- * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
+ * @version 2.8.0-RELEASE-SMO-RULER-VIEW-PENNER-TWINNING-COMPLIANT
+ * @description Суб-представление Дашборда Линейки.
+ * ИСПРАВЛЕН ТВИННИНГ: Позиция каретки ▲ привязана к вещественному регистру интерполяции _currentTriangleX.
+ * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp / Zero Allocation.
  */
+
+import { packCellBits } from "../../io/terminal/sprite_blit.js";
 
 const SAFE_MAX_COLS = 512;
-
-// Статический DOD-буфер для разложения чисел без аллокаций памяти в такте блайтинга кадра
 const _digitCharBuffer = new Uint8Array([0x20, 0x20, 0x20, 0x20]); 
 
-/**
- * Синхронный накат координатных линеек и каретки CPU на UHD-матрицу прибора
- * @param {Array[]} matrix Плоская мономорфная UHD-матрица знакомест прибора
- * @param {number} currentW Текущая флекс-ширина прибора в знакоместах
- * @param {number} currentH Текущая флекс-высота прибора в строках
- * @param {Object} mdl Ссылка на мономорфную модель данных дашборда
- */
 export function renderRulerContent(matrix, currentW, currentH, mdl) {
-    if (!matrix || currentH < 2) return;
+    if (!matrix || currentH < 6) return;
 
-    const topRow = matrix[1]; 
-    const midRow = matrix[2]; 
-
-    if (!topRow || !midRow) return;
+    const topRow = matrix[3]; 
+    const midRow = matrix[4]; 
+    const botRow = matrix[5];
+    if (!topRow || !midRow || !botRow) return;
 
     const limitW = Math.min(SAFE_MAX_COLS, Math.max(1, Math.floor(currentW || 120)));
+    const defBg = "\x1b[40m";
+
+    const packedLineBits  = packCellBits("─", "\x1b[38;5;239m", defBg);
+    const packedCrossBits = packCellBits("┼", "\x1b[38;5;242m", defBg);
+    const packedTickBits  = packCellBits("┴", "\x1b[38;5;220m", defBg);
 
     for (let x = 2; x < limitW - 2; x++) {
         const absX = x - 1;
         const remainderNum = absX % 10;
 
-        if (midRow[x]) {
-            midRow[x].char = "─";
-            midRow[x].fg = "\x1b[38;5;239m"; 
-            midRow[x].bg = "\x1b[40m";
-        }
+        midRow[x] = packedLineBits;
 
         if (absX % 5 === 0 && remainderNum !== 0) {
-            if (midRow[x]) {
-                midRow[x].char = "┼";
-                midRow[x].fg = "\x1b[38;5;242m";
-            }
+            midRow[x] = packedCrossBits;
         }
 
         if (remainderNum === 0) {
-            if (midRow[x]) {
-                midRow[x].char = "┴";
-                midRow[x].fg = "\x1b[38;5;220m"; 
-            }
+            midRow[x] = packedTickBits;
 
-            // ПРЯМАЯ ИН-ПЛЕЙС ВЕКТОРИЗАЦИЯ ЧИСЛА (0% String Sugar, 0% Garbage)
             let temp = absX;
             const db = _digitCharBuffer;
-            
-            // ИСПРАВЛЕНИЕ: Восстановлен явный синтаксис зачистки элементов типизированного массива
             db[0] = 0x20; db[1] = 0x20; db[2] = 0x20; db[3] = 0x20;
 
             let charCount = 0;
             if (temp === 0) {
-                db[0] = 0x30;
-                charCount = 1;
+                db[0] = 0x30; charCount = 1;
             } else {
-                // Временный стек разрядов для сохранения прямого порядка записи
                 let t1 = temp;
-                if (t1 >= 100) { charCount = 3; }
-                else if (t1 >= 10) { charCount = 2; }
-                else { charCount = 1; }
+                if (t1 >= 100) charCount = 3;
+                else if (t1 >= 10) charCount = 2;
+                else charCount = 1;
 
                 let idx = charCount - 1;
                 while (t1 > 0 && idx >= 0) {
@@ -77,27 +60,32 @@ export function renderRulerContent(matrix, currentW, currentH, mdl) {
                 }
             }
 
-            // Центрирование штампа относительно репера (засечки) для эстетики TUI интерфейса
             const startX = x - Math.floor(charCount / 2);
-
             for (let charIdx = 0; charIdx < charCount; charIdx++) {
                 const targetX = startX + charIdx;
-                if (targetX >= 2 && targetX < limitW - 2 && topRow[targetX]) {
-                    topRow[targetX].char = String.fromCharCode(db[charIdx]);
-                    topRow[targetX].fg = "\x1b[38;5;44m"; 
-                    topRow[targetX].bg = "\x1b[40m";
+                if (targetX >= 2 && targetX < limitW - 2) {
+                    topRow[targetX] = packCellBits(String.fromCharCode(db[charIdx]), "\x1b[38;5;44m", defBg);
                 }
             }
         }
     }
 
-    // ВЫЖИГАНИЕ КРАСНОГО ТРЕУГОЛЬНИКА ПО ОРДИНАТЕ X (Метрика CPU нагрузки)
-    const cpuPct = Math.max(0, Math.min(100, Math.floor(mdl?._cpuPercent || 0)));
-    const usableWidth = limitW - 6;
-    const targetTriangleX = 3 + Math.floor((cpuPct / 100) * usableWidth);
+    // =================================================================
+    // ВЫЖИГ ТВИННИНГ-КАРЕТКИ ▲ С ОКРУГЛЕНИЕМ ВЕЩЕСТВЕННОЙ КООРДИНАТЫ
+    // =================================================================
+    // Считываем живой сглаженный шаг интерполяции Роберта Пеннера
+    const floatTriangleX = Number(mdl?._currentTriangleX ?? 3);
+    const targetTriangleX = Math.round(floatTriangleX);
     
-    if (matrix[3] && matrix[3][targetTriangleX]) {
-        matrix[3][targetTriangleX].char = "▲";
-        matrix[3][targetTriangleX].fg = "\x1b[38;5;196m"; 
+    if (targetTriangleX >= 2 && targetTriangleX < limitW - 2) {
+        // Каретка плавно скользит по нижней строке Y = 5 знакомест Дашборда
+        botRow[targetTriangleX] = packCellBits("▲", "\x1b[38;5;196m", defBg);
     }
 }
+
+/** 
+ * ПАСПОРТ ЛИСТИНГА:
+ * Путь: src/modules/dashboard/ruler_view.js
+ * Время исправления: 03.09.2026 14:12:35 MSK
+ * Ревизия: #0824-RULER-VIEW-PENNER-TWINNING-STABLE
+ */
