@@ -1,9 +1,9 @@
 /**
  * @file src/io/terminal/mouse/mouse_router.js
- * @version 1.0.1-RELEASE-SMO-DOD-MOUSE-ROUTER-FNBAR-HIT-READY
+ * @version 1.2.0-RELEASE-SMO-DOD-MOUSE-ROUTER-PURE-PAC-TRIAD
  * @description Изолированный процедурный распределитель прерываний SGR-мыши.
- * ИСПРАВЛЕН ХИТ-ТЕСТ 104: Добавлен прецизионный расчет клика по 10 функциональным кнопкам Far-меню.
- * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
+ * ИСПРАВЛЕНО: Прикладные клики переведены на прямой сквозной вызов triad.ctl.processIntent.
+ * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp / Zero Allocation.
  */
 
 import { generateGpssTransaction, _gpssEngineState } from "../../../core/smo/bus.js";
@@ -15,6 +15,8 @@ const WHEEL_DEBOUNCE_MS = 35;
  * Распределяет очищенные TUI-прерывания мыши по системным и прикладным каналам
  */
 export function routeMouseIntent(targetSlotIdStr, rawMouseAction, isWheelEvent, geo, localX, localY, checkX, checkY) {
+    if (!targetSlotIdStr || !geo) return;
+
     const subZonesRegistry = _gpssEngineState.activeSubZonesRegistry;
     const currentActiveZone = Math.floor(subZonesRegistry[targetSlotIdStr] ?? 1);
 
@@ -63,38 +65,35 @@ export function routeMouseIntent(targetSlotIdStr, rawMouseAction, isWheelEvent, 
         return;
     }
 
+    // Извлекаем прибор и его текущую активную PAC-триаду из ОЗУ ядра
+    const facility = _gpssEngineState.facilitiesRegistry.get(targetSlotIdStr);
+    const activeIdx = facility ? Math.max(0, Math.floor(facility.activeStackIdx || 0)) : 0;
+    const triad = facility && Array.isArray(facility.viewStack) ? facility.viewStack[activeIdx] : null;
+
     // =================================================================
-    // МАРШРУТ В: СТАНДАРТНЫЙ ПРИКЛАДНОЙ КЛИК ВНУТРИ ТЕЛА ОКНА
+    // МАРШРУТ В: МОНОМОРФНЫЙ PAC-ВЫЗОВ CONTROL-СЛОТА ТРИАДЫ (0% ШИНЫ / 0% GC)
     // =================================================================
-    // ИСПРАВЛЕНИЕ: Прецизионный расчет клика Far-кнопок, если мы попали в Слот 104
-    if (targetSlotIdStr === "104" && rawMouseAction === "MOUSE_CLICK") {
-        const w = Math.max(40, Math.floor(geo.w || 120));
-        const availableWidth = w - 2;
-        const singleKeyWidth = Math.floor(availableWidth / 10);
-        
-        // Вычисляем индекс нажатой клавиши от 0 до 9
-        const keyIdx = Math.floor((localX - 1) / singleKeyWidth);
-        
-        if (keyIdx >= 0 && keyIdx < 10 && localY === 1) {
-            const fnPayload = { keyNumber: keyIdx + 1, localX: localX, localY: localY };
-            Object.preventExtensions(fnPayload);
-            
-            // Транслируем очищенный клик кнопки Far-меню в его родной контроллер 104
-            generateGpssTransaction("104", "FN_KEY_CLICKED", fnPayload, "10");
-            return;
-        }
+    if (triad && triad.ctl && typeof triad.ctl.processIntent === "function") {
+        const mouseContextPayload = { 
+            x: checkX, y: checkY, localX: localX, localY: localY, action: rawMouseAction 
+        };
+        Object.preventExtensions(mouseContextPayload);
+
+        // Клик проваливается напрямую в логику прибора без промежуточных транзактов!
+        triad.ctl.processIntent(triad, rawMouseAction, mouseContextPayload);
+        return;
     }
 
-    const mouseContextTxPayload = { 
+    // Фолбэк для инфраструктурных системных вызовов, если триада не уложена
+    const fallbackPayload = { 
         x: checkX, y: checkY, localX: localX, localY: localY, action: rawMouseAction 
     };
-    Object.preventExtensions(mouseContextTxPayload);
-
-    generateGpssTransaction(targetSlotIdStr, rawMouseAction, mouseContextTxPayload, "10");
+    Object.preventExtensions(fallbackPayload);
+    generateGpssTransaction(targetSlotIdStr, rawMouseAction, fallbackPayload, "10");
 }
 
 /** 
  * ПАСПОРТ ЛИСТИНГА:
  * Путь: src/io/terminal/mouse/mouse_router.js
- * Время изменения: 06.09.2026 21:18:00 MSK
+ * Время изменения: 10.09.2026 19:00:00 MSK
  */

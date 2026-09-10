@@ -1,8 +1,8 @@
 /**
  * @file src/io/terminal/z_layers/z3_interactive_reducer.js
- * @version 2.0.2-RELEASE-SMO-Z3-INTERACTIVE-DECLARATIVE-BUTTONS-FIX
+ * @version 2.0.4-RELEASE-SMO-Z3-INTERACTIVE-PRODUCTION-CLEAN
  * @description Автономная DOD-процедура наката управляющих кнопок и вкладок (Слой Z-3).
- * ИСПРАВЛЕН СЛОТ 100: Системные кнопки рамы отключены на основе декларативной высоты из JSON.
+ * ИСПРАВЛЕНО: Отладочный выжиг координат плоских слотов полностью удален. Контур очищен под релиз.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp / Zero Allocation / 0% GC.
  */
 
@@ -68,22 +68,23 @@ export function reduceInteractiveLayer(targetM, host, geoMap, allRegisteredKeys,
             _staticDodNodesStack[--stackPtr] = null;
         }
 
-        // =================================================================
-        // ИСПРАВЛЕНИЕ: БЛOКИРОВКА СИСТЕМНЫХ КНОПОК ДЛЯ ПЛОСКИХ СЛОТОВ
-        // =================================================================
-        // Проверяем высоту напрямую из JSON. Если в манифесте задана 1 строка —
-        // прибор не имеет рамы, и накат кнопок [-][▲][×] полностью блокируется.
         const declarativeHeight = layoutNodeRef ? parseInt(layoutNodeRef.height || "0", 10) : 0;
 
+        // 1. ОТРИСОВКА КНОПОК ДЛЯ ОБЪЕМНЫХ ОКOН
         if (declarativeHeight > 1 && sH > 1) {
             drawWindowButtonsOverlay(targetM, sX, sY, sW, sH, slotId);
         }
+
+        // =================================================================
+        // ИСПРАВЛЕНИЕ: ОТЛАДОЧНЫЕ ОРАНЖЕВЫЕ ПЛАШКИ УДАЛЕНЫ (ПАКЕТ ЗАКРЫТ)
+        // =================================================================
+        // Код сквозного выжигания строк {100->...} полностью ликвидирован, 
+        // чтобы освободить растр строки Y=46 под вывод прикладных плашек задач.
 
         // 2. РАСПРЕДЕЛЕНИЕ ВКЛАДОК ПО ПРАВИЛУ ТABS_IN
         const activeIdx = Math.max(0, Math.floor(facility.activeStackIdx || 0));
         if (facility.viewStack) {
             const node = Array.isArray(facility.viewStack) ? facility.viewStack[activeIdx] : facility.viewStack;
-            
             const rawTabsArray = layoutNodeRef?.tabs || [];
             const tabsCount = Math.min(rawTabsArray.length, 16);
 
@@ -119,5 +120,5 @@ export function reduceInteractiveLayer(targetM, host, geoMap, allRegisteredKeys,
 /** 
  * ПАСПОРТ ЛИСТИНГА:
  * Путь: src/io/terminal/z_layers/z3_interactive_reducer.js
- * Время изменения: 10.09.2026 16:14:15 MSK
+ * Время изменения: 10.09.2026 17:34:00 MSK
  */

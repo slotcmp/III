@@ -1,14 +1,15 @@
 /**
  * @file src/modules/theme/theme_view.js
- * @version 3.2.1-RELEASE-SMO-THEME-VIEW-Z3-TAB-FIXED
- * @description Пассивный процедурный отрисовщик TUI-строк палитр Слота 106.
- * ИСПРАВЛЕН СДВИГ ВКЛАДКИ: Отрисовка таба PALETTE полностью делегирована слою Z-3.
- * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
+ * @version 3.3.0-RELEASE-SMO-THEME-VIEW-SCROLLBAR-BOUND
+ * @description Пассивный процедурный отрисовщик TUI-строк палитр Слота 106 с поддержкой смещения вьюпорта.
+ * ИСПРАВЛЕНО: Интегрирован учет viewportOffset от Канала 14 и исправлен расчет totalThemes.
+ * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp / Zero Allocation.
  */
 
 import { prepareGenericTuiLayout } from "../../io/terminal/generic_tui_layout.js";
 import { drawFrameGrid } from "../../io/terminal/frame_grid_renderer.js";
 import { drawThemeItem } from "./theme_item_renderer.js";
+import { _gpssEngineState } from "../../core/smo/bus.js";
 
 /**
  * Унифицированная процедура рендеринга контента Панели Тем
@@ -19,32 +20,40 @@ export function renderContent(matrix, currentW, currentH, mdl, activeTabIdx, slo
     const w = Math.floor(currentW || 40);
     const h = Math.floor(currentH || 15);
 
-    // 1. Извлекаем кэшированный плоский массив имен вкладок
     const titles = mdl._globalTabsNamesCached || ["PALETTE"];
 
-    // 2. ИСПРАВЛЕНИЕ: Передаем false (7-й аргумент) для флага табов. 
-    // Шаблонизатор просто очистит строку, а накат плашки PALETTE выполнит Z-3 редьюсер.
+    // 1. Очистка и базовая подготовка TUI-шаблона
     prepareGenericTuiLayout(matrix, w, h, mdl, titles, activeTabIdx, false, slotIdStr, true);
 
-    // 3. Накатываем координатную сетку знакомест с защитой желоба скроллбара
+    // 2. Накатываем координатную сетку знакомест с защитой желоба скроллбара
     drawFrameGrid(matrix, w, h, true);
 
-    // 4. Построчный безаллокационный вывод тем из JSON с Y = 3
+    // 3. Считываем живое смещение прокрутки Палитры из модели Канала 14 (0% GC)
+    const vScrollMdl = _gpssEngineState.facilitiesRegistry.get("14")?.mdl;
+    const offset = vScrollMdl ? Math.max(0, Math.floor(vScrollMdl.viewportOffsetRegistry[106] || 0)) : 0;
+
+    // 4. Построчный вывод тем с учетом вьюпорта с Y = 3
     const themes = mdl.themesList || [];
-    const total = Math.floor(mdl.totalThemes || 0);
+    const total = themes.length; // Фикс: берем реальную физическую длину массива в ОЗУ
     const selected = Math.floor(mdl.selectedIndex || 0);
 
     // Вычисляем физический лимит строк контента
     const maxVisibleRows = Math.max(1, h - 4);
-    const printCount = Math.min(total, maxVisibleRows);
+    
+    // Количество строк, которые физически будут выведены на экран в текущем вьюпорте
+    const printCount = Math.min(maxVisibleRows, Math.max(0, total - offset));
 
     for (let i = 0; i < printCount; i++) {
         const rowLineIdx = 3 + i;
         const row = matrix[rowLineIdx];
-        const themeItem = themes[i];
+        
+        // Читаем объект темы с учетом абсолютного смещения прокрутки
+        const themeItem = themes[offset + i];
 
         if (row && themeItem) {
-            const isSelected = (i === selected);
+            // Сопоставляем фокус по абсолютному индексу элемента в ОЗУ
+            const isSelected = (offset + i === selected);
+            
             // Вызываем пассивный атомарный отрисовщик строки темы
             drawThemeItem(row, themeItem, w, isSelected);
         }
@@ -54,5 +63,5 @@ export function renderContent(matrix, currentW, currentH, mdl, activeTabIdx, slo
 /** 
  * ПАСПОРТ ЛИСТИНГА:
  * Путь: src/modules/theme/theme_view.js
- * Время исправления: 09.09.2026 14:35:10 MSK
+ * Время изменения: 10.09.2026 21:05:00 MSK
  */

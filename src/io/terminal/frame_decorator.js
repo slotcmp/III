@@ -1,8 +1,8 @@
 /**
  * @file src/io/terminal/frame_decorator.js
- * @version 2.9.6-RELEASE-SMO-FRAME-DECORATOR-STRICT-OVERRIDE
+ * @version 2.9.7-RELEASE-SMO-FRAME-DECORATOR-GEO-DEBUG
  * @description Пассивный DOD-выжигатель оконных рамок и кнопок обвеса в Int32Array.
- * ИСПРАВЛЕНО: Защита контента убрана с базового периметра рамы (0% блокировок вертикалей).
+ * ИСПРАВЛЕНО: Интегрирован вывод живых рантайм-координат [X:Y W:H] на верхнюю планку окон.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp / 0% GC.
  */
 
@@ -35,20 +35,17 @@ export function drawFacilityWindowFrame(targetM, sX, sY, sW, sH, isFocusedBool, 
     const packedBLBits    = packCellBits("╚", themeColorAnsi, bgColor);
     const packedBRBits    = packCellBits("╝", themeColorAnsi, bgColor);
 
-    // =================================================================
-    // ПРЯМОЙ ВЫЖИГ КАРКАСА РАМЫ (БЕЗ БЛОКИРОВОК КОНТЕНТОМ ВИДА)
-    // =================================================================
     const tR = targetM[sY];
     const bR = targetM[sY + sH - 1];
     
-    // 1. ГОРИЗОНТАЛЬНЫЕ РЕБРА ЧЕРТЯТСЯ НАПРЯМУЮ
+    // 1. ГОРИЗОНТАЛЬНЫЕ РЕБРА
     for (let x = 0; x < sW; x++) {
         const posX = (sX + x) | 0;
         if (tR) tR[posX] = packedHorizBits;
         if (bR) bR[posX] = packedHorizBits;
     }
     
-    // 2. ВЕРТИКАЛЬНЫЕ РЕБРА ЧЕРТЯТСЯ НАПРЯМУЮ (0% КРАШЕЙ / ВЕРНУЛИ СТЕНЫ!)
+    // 2. ВЕРТИКАЛЬНЫЕ РЕБРА
     for (let y = 0; y < sH; y++) {
         const row = targetM[sY + y];
         if (row) {
@@ -67,12 +64,8 @@ export function drawFacilityWindowFrame(targetM, sX, sY, sW, sH, isFocusedBool, 
         bR[sX + sW - 1] = packedBRBits;
     }
 
-    // 4. НАКАТ ПАСПОРТА ЗАГОЛОВКА С ТРАФАРЕТНОЙ ЗАЩИТОЙ ГЛОБАЛЬНОЙ СТРОКИ 0
-    // Если окно начинается с Y=0, дефолтный текстовый паспорт блокируется, 
-    // чтобы освободить место для агрегатора вкладок Слота 200 на фазе Z-3
-    if (sY === 0) {
-        return; 
-    }
+    // 4. НАКАТ ПАСПОРТА ЗАГОЛОВКА
+    if (sY === 0) return; 
 
     let displayTitle = String(compTypeStr || slotIdStr).toUpperCase();
     if (displayTitle === "THEME") displayTitle = "COLOR PALETTE";
@@ -89,10 +82,25 @@ export function drawFacilityWindowFrame(targetM, sX, sY, sW, sH, isFocusedBool, 
             const posX = (textStartIdx + t) | 0;
             const currentCell = tR[posX] | 0;
             const charCode = currentCell & 0xFF;
-            // Защита контента работает исключительно внутри паспорта текста на средних эшелонах
             if (charCode === 32 || charCode === 0 || charCode === 0x3D) {
                 tR[posX] = packCellBits(passportLineStr.charAt(t), activeTextAnsiColor, bgColor);
             }
+        }
+    }
+
+    // =================================================================
+    // ВРЕЗКА: ОТЛАДОЧНЫЙ ВЫЖИГ ЖИВЫХ ГЛОБАЛЬНЫХ КООРДИНАТ ОКНА (0% GC)
+    // =================================================================
+    if (tR && sW > 35) {
+        const geoDebugStr = "[" + sX + ":" + sY + " " + sW + ":" + sH + "]";
+        const geoLen = geoDebugStr.length;
+        
+        // Помещаем плашку координат строго слева перед кнопками [-][▲][×]
+        const geoStartIdx = sX + sW - 14 - geoLen;
+        const colorGeoAnsi = "\x1b[38;5;220m"; // Золотой отладочный цвет
+        
+        for (let g = 0; g < geoLen; g++) {
+            tR[geoStartIdx + g] = packCellBits(geoDebugStr.charAt(g), colorGeoAnsi, bgColor);
         }
     }
 }
@@ -102,8 +110,6 @@ export function drawFacilityWindowFrame(targetM, sX, sY, sW, sH, isFocusedBool, 
  */
 export function drawWindowButtonsOverlay(targetM, sX, sY, sW, sH, slotIdStr) {
     if (!targetM || sW < 17 || sH < 2 || sX < 0 || sY < 0) return;
-
-    // Кнопки свертывания полностью блокируются на глобальной строке Y=0 в пользу агрегатора 200
     if (sY === 0) return;
 
     const tR = targetM[sY];
@@ -138,5 +144,5 @@ export function drawWindowButtonsOverlay(targetM, sX, sY, sW, sH, slotIdStr) {
 /** 
  * ПАСПОРТ ЛИСТИНГА:
  * Путь: src/io/terminal/frame_decorator.js
- * Время изменения: 10.09.2026 16:03:00 MSK
+ * Время изменения: 10.09.2026 17:28:00 MSK
  */
