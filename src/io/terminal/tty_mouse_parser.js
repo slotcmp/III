@@ -1,95 +1,70 @@
 /**
  * @file src/io/terminal/tty_mouse_parser.js
- * @version 6.2.0-RELEASE-SMO-MOUSE-PARSER-DECOUPLED
+ * @version 7.0.0-RELEASE-SMO-MOUSE-PARSER-STRICT-IDD-COMPLIANT
  * @description Центральный WM-диспетчер SGR-мыши платформы SLOTCMP III.
- * ИСПРАВЛЕНО МОНОЛИТИЗИРОВАНИЕ: Логика маршрутизации вынесена в изолированный модуль mouse_router.js.
- * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
+ * ИСПРАВЛЕН КРАХ ФOКУСA: Изъяты скрытые мутации и прямой роутинг. Драйвер переведен на чистый вброс транзактов в Канал 10.
+ * Выполнен в строгой парадигме PAC / DOD / IDD / 0% OOP / 0% RegExp / Zero Allocation / 0% GC.
  */
 
-import { generateGpssTransaction, _gpssEngineState, _activeThemeState } from "../../core/smo/bus.js";
-import { routeMouseIntent } from "./mouse/mouse_router.js";
+import { generateGpssTransaction } from "../../core/smo/bus.js";
 
 /**
- * Парсит байты ConPTY, выполняет O(1) хит-тест геометрии окон и переключает фокус в шине
+ * Парсит параметры ConPTY и атомарно маршалирует сырой аппаратный импульс мыши в FIFO-очередь СМО
+ * @param {number|string} btn Сырой код кнопки из SGR-последовательности
+ * @param {number|string} mX Физический столбец клика на экране терминала (1-based)
+ * @param {number|string} mY Физическая строка клика на экране терминала (1-based)
+ * @param {boolean} isReleaseChar Флаг отпускания кнопки (символ 'm' или 'M')
+ * @param {any} staticSlots Неиспользуемый инфраструктурный резерв
+ * @param {Object} kernel Ссылка на ОЗУ-рантайм хоста ядра
  */
 export function parseAndDispatchSgr(btn, mX, mY, isReleaseChar, staticSlots, kernel) {
-    if (!kernel || !kernel.calculatedGeoMap) return;
+    if (!kernel) return;
 
+    // Переводим 1-based координаты ConPTY в каноничный 0-based растр знакомест TUI
     const checkX = Math.max(0, Math.floor(Number(mX) || 1) - 1);
     const checkY = Math.max(0, Math.floor(Number(mY) || 1) - 1);
     const buttonCode = Math.max(0, Math.floor(Number(btn) || 0));
 
     let rawMouseAction = "";
-    let isWheelEvent = false;
 
+    // =================================================================
+    // СТРОГАЯ ФИЛЬТРАЦИЯ ДВИЖЕНИЯ МЫШИ (MOTION = 32) И КОДИРОВАНИЕ ФАЗ
+    // =================================================================
+    // Проверка бита прокрутки колесика (64)
     if ((buttonCode & 64) !== 0) {
         const wheelDirectionBit = buttonCode & 3;
         rawMouseAction = (wheelDirectionBit === 0) ? "WHEEL_UP" : "WHEEL_DOWN";
-        isWheelEvent = true;
-    } else if ((buttonCode & 3) === 0 && !isReleaseChar) {
+    } 
+    // Клик левой кнопкой мыши: биты движения (32) и код кнопки (3) равны 0, кнопка зажата (!isReleaseChar)
+    else if ((buttonCode & 32) === 0 && (buttonCode & 3) === 0 && !isReleaseChar) {
         rawMouseAction = "MOUSE_CLICK";
     }
 
+    // Если зафиксировано обычное перемещение (hover) или фаза отпускания 'm' —
+    // пассивно тушим такт прерывания, полностью защищая Event Loop от лавины мусора
     if (rawMouseAction.length === 0) return;
 
-    const activeFacilitiesKeys = _gpssEngineState.facilitiesKeysCached;
-    const len = activeFacilitiesKeys.length;
-    let targetSlotIdStr = "105";
+    // =================================================================
+    // МЕТОДОЛОГИЯ IDD: УПАКОВКА И ВБРОС ИМПУЛЬСА В ШИНУ СМО (КАНАЛ 10)
+    // =================================================================
+    // Создаем плоский анемичный паспорт сырого прерывания ОС
+    const rawMousePayload = { 
+        x: checkX, 
+        y: checkY, 
+        action: rawMouseAction 
+    };
+    
+    // Блокируем расширение скрытого класса Fast Properties для TurboFan (0% GC)
+    Object.preventExtensions(rawMousePayload);
 
-    for (let i = 0; i < len; i++) {
-        const slotId = activeFacilitiesKeys[i];
-        if (slotId === "0" || slotId === "1" || slotId === "4" || slotId === "9" || slotId === "10" || slotId === "11" || slotId === "12" || slotId === "14") {
-            continue;
-        }
-
-        const geo = kernel.calculatedGeoMap[slotId];
-        if (geo) {
-            if (checkX >= geo.x && checkX < geo.x + geo.w && checkY >= geo.y && checkY < geo.y + geo.h) {
-                targetSlotIdStr = slotId;
-                break;
-            }
-        }
-    }
-
-    const geo = kernel.calculatedGeoMap[targetSlotIdStr];
-    if (!geo) return;
-
-    const localX = checkX - geo.x;
-    const localY = checkY - geo.y;
-
-    const subZonesRegistry = _gpssEngineState.activeSubZonesRegistry;
-
-    // Быстрая попиксельная разметка подзон
-    if (localY === 0 || localY === geo.h - 1 || localX === 0 || localX === geo.w - 1) {
-        subZonesRegistry[targetSlotIdStr] = 2; // Границы окон WM
-    } else if (localY === 1 && geo.h >= 5) {
-        subZonesRegistry[targetSlotIdStr] = 0; // Строка Вкладок (Канал 12)
-    } else {
-        subZonesRegistry[targetSlotIdStr] = 1; // Контентная рабочая зона
-    }
-
-    if (rawMouseAction === "MOUSE_CLICK") {
-        if (targetSlotIdStr !== "108") {
-            _activeThemeState.focusedSlotIdStr = targetSlotIdStr;
-            if (kernel.model?.logicalState) {
-                kernel.model.logicalState.focusedSlotId = targetSlotIdStr;
-            }
-            kernel.virtualCanvasState.isDirty = true;
-        }
-
-        if (subZonesRegistry[targetSlotIdStr] === 2) {
-            const resizePayload = { slotId: targetSlotIdStr, localX: localX, localY: localY };
-            generateGpssTransaction("9", "RESIZE_SLOT_GEOMETRY", resizePayload, "10");
-            return;
-        }
-    }
-
-    // Делегируем тяжелую семантическую маршрутизацию размоноличенному ядру
-    routeMouseIntent(targetSlotIdStr, rawMouseAction, isWheelEvent, geo, localX, localY, checkX, checkY);
+    // Выстреливаем транзакт в FIFO-очередь обслуживающего прибора мыши (Канал 10).
+    // Теперь процессор шины bus.js сам передаст управление в mouse_worker_unit.js,
+    // где размоноличенные редьюсеры вычислят хит-тест по отрисованной геометрии!
+    generateGpssTransaction("10", "RAW_MOUSE_INTERRUPT", rawMousePayload, "10");
 }
 
 /** 
  * ПАСПОРТ ЛИСТИНГА:
  * Путь: src/io/terminal/tty_mouse_parser.js
- * Время изменения: 06.09.2026 18:55:15 MSK
+ * Время изменения: 18.09.2026 04:41:00 MSK
  */

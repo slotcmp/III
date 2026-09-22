@@ -1,190 +1,82 @@
 /**
  * @file src/modules/explorer/explorer_ctl.js
- * @version 3.9.5-RELEASE-SMO-EXPLORER-CTL-STATIC-REGISTERS-PERFECT
- * @description Контроллер и фазовый фильтр СМО-приборов Проводников (Каналы 102 и 103).
- * ИСПРАВЛЕН КРАШ EXTENSIONS: Метки двойного клика перенесены в статический ОЗУ-массив _clicksRegistry.
- * Выполнен в строгой парадигме PAC / DOD / 0% OOP / Zero Allocation / 0% GC.
+ * @version 6.4.2-RELEASE-SMO-EXPLORER-CTL-STRICT-DECOUPLED
+ * @description Системный PAC-контроллер обслуживания Проводника (Канал 102/103).
+ * ИСПРАВЛЕНО: Извлечение триады при SWITCH_SLOT_TAB переведено на целевой targetStackIdx из payload.
+ * Выполнен в строгой парадигме PAC / DOD / 0% OOP / Zero Allocation.
  */
 
-import path from "node:path";
-import { generateGpssTransaction } from "../../core/smo/bus.js";
+import { _gpssEngineState } from "../../core/smo/bus.js";
+import { processGenericUiKinematics } from "../../core/smo/window_manager.js";
+import { reduceCollectionInject } from "./intents/collection_inject.js";
 
-// Стерильный статический ОЗУ-реестр кликов под Каналы 102 и 103 (0% OOP)
-// Смещение: [slotIdNum * 2] = lastClickTime, [slotIdNum * 2 + 1] = lastClickIdx
-const _clicksRegistry = new Float64Array(256);
+/**
+ * Главная мономорфная точка входа Control-слота Проводника
+ */
+export function processIntent(triad, intentStr, contextPayload, forcedSlotIdStr) {
+    if (!intentStr) return false;
 
-export function createExplorerController(appHostRef, slotIdStr) {
-    const id = String(slotIdStr || "102");
-    const ctlState = { mdl: null, view: null, host: appHostRef, slotId: id };
-    Object.preventExtensions(ctlState);
-    return ctlState;
+    const intent = String(intentStr || "");
+    const slotIdStr = String(forcedSlotIdStr || "102");
+    const facility = _gpssEngineState.facilitiesRegistry.get(slotIdStr);
+
+    // =================================================================
+    // 1. СПЕЦИФИЧЕСКИЙ ДОМЕННЫЙ ИНТЕНТ (БИЗНЕС-ЛОГИКА ПРОФИЛЯ VFS)
+    // =================================================================
+    if (intent === "INJECT_VFS_DATA" && triad) {
+        const viewStack = facility ? facility.viewStack : null;
+        return reduceCollectionInject(triad, contextPayload, slotIdStr, viewStack);
+    } 
+
+    // ИСПРАВЛЕНО: Реактивный перехват SWITCH_SLOT_TAB с динамическим выбором целевой триады
+    if (intent === "SWITCH_SLOT_TAB" && facility && Array.isArray(facility.viewStack)) {
+        const kernel = _gpssEngineState.runtime;
+        const targetTabIdx = contextPayload && contextPayload.targetStackIdx !== undefined 
+            ? (contextPayload.targetStackIdx | 0) 
+            : 0;
+
+        // Извлекаем строго ТУ триаду, на которую переключилось колесико мыши
+        const targetTriad = facility.viewStack[targetTabIdx];
+        if (targetTriad && targetTriad.mdl && kernel && kernel.workerGateway) {
+            // Синхронизируем индекс в корне фасилити
+            facility.activeStackIdx = targetTabIdx;
+            
+            // Проводник САМ взводит флаг грязи на своей суверенной модели таба
+            targetTriad.mdl._isDirty = true;
+            
+            // Запускаем асинхронное побайтовое чтение папки для правильного таба
+            kernel.workerGateway.triggerDirectoryIndexing(slotIdStr, targetTriad.mdl.currentDirectoryPath, targetTabIdx);
+            return true;
+        }
+        return false;
+    }
+
+    // =================================================================
+    // 2. ДЕЛЕГИРОВАНИЕ НЕСПЕЦИФИЧЕСКИХ ИНТЕНТОВ В WINDOW_MANAGER
+    // =================================================================
+    if (!triad) return false;
+    return processGenericUiKinematics(facility, intent, contextPayload);
 }
 
+/**
+ * Адаптер обратной совместимости для тактового двигателя шины
+ */
 export function processSpecificExplorerLogic(facilityState, intentStr, contextPayload, currentTx) {
-    const pack = facilityState.viewStack;
-    if (!pack) return false;
+    if (!facilityState) return false;
+
+    const intent = String(intentStr || "");
+    const payload = contextPayload ? contextPayload : (currentTx ? currentTx.P3 : {});
+
+    // ИСПРАВЛЕНО: Если пришел свитч таба, мы передаем null вместо жесткой триады,
+    // так как processIntent извлечет целевую триаду самостоятельно из payload
+    if (intent === "SWITCH_SLOT_TAB") {
+        return processIntent(null, intent, payload, String(facilityState.slotId || "102"));
+    }
 
     const activeIdx = Math.max(0, Math.floor(facilityState.activeStackIdx || 0));
-    const currentTabNode = pack[activeIdx];
-    if (!currentTabNode || !currentTabNode.mdl || !currentTabNode.view) return false;
+    const triad = facilityState.viewStack ? facilityState.viewStack[activeIdx] : null;
+    if (!triad) return false;
 
-    const m = currentTabNode.mdl;
-    const v = currentTabNode.view;
-    const intent = String(intentStr || "");
-    const slotIdStr = facilityState.slotId;
-    let isMutated = false;
-
-    switch (intent) {
-        case "INJECT_VFS_DATA":
-            if (contextPayload && contextPayload.items) {
-                const srcItemsArray = contextPayload.items;
-                const srcLen = srcItemsArray.length;
-                const stackLen = pack.length;
-
-                for (let i = 0; i < stackLen; i++) {
-                    const node = pack[i];
-                    if (node && node.mdl && node.mdl.itemsList) {
-                        const targetArr = node.mdl.itemsList;
-                        
-                        targetArr.length = 0; 
-                        for (let j = 0; j < srcLen; j++) {
-                            targetArr[j] = srcItemsArray[j]; 
-                        }
-
-                        if (node.mdl.selectedIndex >= targetArr.length) {
-                            node.mdl.selectedIndex = Math.max(0, targetArr.length - 1);
-                        }
-                        node.mdl._isDirty = true;
-                    }
-                }
-
-                const maxVisibleRows = Math.max(1, Math.floor((v.height || 15) - 4));
-                generateGpssTransaction("14", "SYNC_SCROLLBAR_METRICS", {
-                    targetSlotId: slotIdStr,
-                    totalItems: srcLen + 1, 
-                    maxVisibleRows: maxVisibleRows
-                }, slotIdStr);
-
-                isMutated = true;
-            }
-            break;
-
-        case "NOTIFY_SCROLL_MUTATED":
-            if (contextPayload) {
-                m.viewportOffset = Math.max(0, Math.floor(contextPayload.viewportOffset || 0));
-                m.selectedIndex  = Math.max(0, Math.floor(contextPayload.selectedIndex || 0));
-                m._isDirty = true;
-                isMutated = true;
-            }
-            break;
-
-        case "SWITCH_SLOT_TAB":
-        case "TAB_CLICKED":
-            if (contextPayload) {
-                const rawIdx = contextPayload.targetStackIdx !== undefined ? contextPayload.targetStackIdx :
-                               (contextPayload.tabIdx !== undefined ? contextPayload.tabIdx : undefined);
-
-                if (rawIdx !== undefined) {
-                    const targetTabIdxNum = Math.max(0, Math.floor(rawIdx || 0));
-                    if (targetTabIdxNum < pack.length) {
-                        facilityState.activeStackIdx = targetTabIdxNum;
-                        const nextActiveNode = pack[targetTabIdxNum];
-                        if (nextActiveNode && nextActiveNode.mdl) {
-                            nextActiveNode.mdl._isDirty = true;
-                            if (facilityState.host?.workerGateway) {
-                                const currentPath = String(nextActiveNode.mdl.currentDirectoryPath || "C:/");
-                                facilityState.host.workerGateway.triggerDirectoryIndexing(slotIdStr, currentPath, targetTabIdxNum);
-                            }
-                            isMutated = true;
-                        }
-                    }
-                }
-            }
-            break;
-
-        // =================================================================
-        // НЕУЯЗВИМЫЙ ВЫЧИСЛИТЕЛЬНЫЙ КЛИК ПО СТАТИЧЕСКИМ РЕГИСТРАМ ОЗУ
-        // =================================================================
-        case "MOUSE_CLICK":
-            if (contextPayload && contextPayload.localY !== undefined) {
-                const localY = Math.floor(contextPayload.localY);
-                
-                if (localY >= 3) {
-                    const totalItems = m.itemsList ? m.itemsList.length : 0;
-                    const targetItemIdx = Math.floor((m.viewportOffset || 0) + (localY - 3));
-                    
-                    if (targetItemIdx >= 0 && targetItemIdx < totalItems) {
-                        const targetItemObj = m.itemsList[targetItemIdx];
-                        
-                        if (targetItemObj) {
-                            const nowTimeNum = Date.now();
-                            const slotIdNum = parseInt(slotIdStr, 10) & 127;
-                            
-                            // Извлекаем метки времени из быстрого бинарного Float64Array
-                            const timeRegistryIdx = slotIdNum * 2;
-                            const idxRegistryIdx = slotIdNum * 2 + 1;
-
-                            const lastClickTimeNum = _clicksRegistry[timeRegistryIdx];
-                            const lastClickIdxNum = _clicksRegistry[idxRegistryIdx] - 1; // Корректируем смещение
-
-                            // ПРОВЕРКА НА ДВОЙНОЙ КЛИК (< 300мс на той же строке)
-                            if (targetItemIdx === lastClickIdxNum && (nowTimeNum - lastClickTimeNum) < 300) {
-                                const isDir = targetItemObj.isDir === true || targetItemObj.isDirectory === true;
-                                const itemNameStr = String(targetItemObj.name || "");
-
-                                if (isDir === true) {
-                                    let nextDirectoryPath = "";
-
-                                    if (itemNameStr === "..") {
-                                        nextDirectoryPath = path.dirname(String(m.currentDirectoryPath || "C:/"));
-                                    } else {
-                                        nextDirectoryPath = path.resolve(String(m.currentDirectoryPath || "C:/"), itemNameStr);
-                                    }
-
-                                    m.currentDirectoryPath = nextDirectoryPath;
-                                    m.selectedIndex = 0; 
-                                    
-                                    // Обнуляем метки времени в Float64Array
-                                    _clicksRegistry[timeRegistryIdx] = 0;
-                                    _clicksRegistry[idxRegistryIdx] = 0;
-
-                                    if (facilityState.host?.workerGateway) {
-                                        facilityState.host.workerGateway.triggerDirectoryIndexing(slotIdStr, nextDirectoryPath, activeIdx);
-                                    }
-                                }
-                            } else {
-                                // ОДИНОЧНЫЙ КЛИК: Перемещаем курсор выделения
-                                m.selectedIndex = targetItemIdx;
-                                
-                                // Сохраняем метки в Float64Array без расширения объектов JS
-                                _clicksRegistry[timeRegistryIdx] = nowTimeNum;
-                                _clicksRegistry[idxRegistryIdx] = targetItemIdx + 1; // +1 для защиты от дефолтного 0
-                            }
-
-                            m._isDirty = true;
-                            isMutated = true;
-                        }
-                    }
-                }
-            }
-            break;
-
-        case "ROTATE_SLOT_STACK":
-        case "UPDATE_THEME_MASK":
-            m._isDirty = true;
-            isMutated = true;
-            break;
-    }
-
-    if (isMutated && facilityState.host?.virtualCanvasState) {
-        facilityState.host.virtualCanvasState.isDirty = true;
-    }
-
-    return isMutated;
+    const currentSlotIdStr = String(facilityState.slotId || "102");
+    return processIntent(triad, intentStr, payload, currentSlotIdStr);
 }
-
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/modules/explorer/explorer_ctl.js
- * Время изменения: 05.09.2026 13:30:15 MSK
- */

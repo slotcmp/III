@@ -1,14 +1,13 @@
 /**
  * @file src/core/smo/facility_pipeline.js
- * @version 3.7.1-RELEASE-SMO-FACILITY-PIPELINE-ORIGIN-COMPLIANT
- * @description Абстрактный конвейер продвижения требований внутри приборов СМО (Control-контур).
- * ИСПРАВЛЕН ORIGIN: Транзакт tx целиком проброшен в конкретный advance-воркер прибора.
- * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
+ * @version 4.7.3-RELEASE-SMO-FACILITY-PIPELINE-EXTENSIBILITY-GUARDED
+ * @description Инфраструктурный конвейер приборов СМО с вытесняющей приоритетной сортировкой.
+ * ИСПРАВЛЕНО: Внедрены строгие гварды на Object.isExtensible для защиты от TypeError на строке 58.
+ * Выполнен в строгой парадигме PAC / DOD / 0% OOP / Zero Allocation.
  */
 
-/**
- * Фабрика генерации структуры абстрактного прибора обслуживания СМО
- */
+import { generateGpssTransaction } from "./bus.js";
+import { dumpSlotFocusTransaction } from "./debug/bus_tracer.js";
 export function createAbstractFacility(hostRef, slotIdStr, workerFn, componentTypeStr, displayIndexNum) {
     const facility = {
         host: hostRef,
@@ -23,25 +22,117 @@ export function createAbstractFacility(hostRef, slotIdStr, workerFn, componentTy
         specificAdvanceWorker: workerFn,
         
         advanceFacility: () => {
-            if (facility.isProcessing) return false;
-            
             const q = facility.localQueue;
-            const head = Math.floor(facility._head || 0);
+            let head = Math.floor(facility._head || 0);
             if (q.length === head) return false;
 
-            facility.isProcessing = true;
+            // Считываем интент на самой вершине честной FIFO-очереди
+            const tx = q[head];
+            const previewIntent = tx ? String(tx.P2 || "").trim() : "";
             let isStateMutated = false;
 
-            while (facility._head < q.length) {
-                const tx = q[facility._head++];
-                if (!tx || tx.status !== "READY") continue;
-
-                const intent = String(tx.P2 || "");
+// =================================================================
+            // ВЫЗОВ ВНЕШНЕГО ИЗОЛИРОВАННОГО МОДУЛЯ ТРАССИРОВКИ ИНТЕНТОВ (IDD)
+            // =================================================================
+            dumpSlotFocusTransaction(facility, tx); 
+            // =================================================================
+            // КОНТУР АБСОЛЮТНОГО ЗАМЕЩЕНИЯ №1: РОТАЦИЯ ТЕЛ ОКOН (SWITCH_SLOT_TAB)
+            // =================================================================
+            if (previewIntent === "SWITCH_SLOT_TAB") {
+                facility.isProcessing = true; // Силовое инфраструктурное замещение роли
+                
+                facility._head++; // АТОМАРНО СДВИГАЕМ КАРЕТКУ FIFO-ОЧЕРЕДИ СМО
                 const payload = tx.P3;
 
+                if (payload) {
+                    const nextIdx = Math.max(0, Math.floor(payload.targetStackIdx || payload.tabIdx || 0)) & 15;
+                    
+                    // Запечатываем вычисленный индекс в единственный корневой регистр фасилити
+                    facility.activeStackIdx = nextIdx;
+
+                    // ИСПРАВЛЕНИЕ СТРОКИ 58: Безопасный выжиг в корневую модель с гвардом расширяемости
+                    const fMdl = facility.mdl;
+                    if (fMdl) {
+                        if (Object.isExtensible(fMdl) && fMdl.activeModifierIdx !== undefined) {
+                            fMdl.activeModifierIdx = nextIdx;
+                        }
+                        fMdl._activeSubZone = nextIdx;
+                        fMdl._isDirty = true;
+                    }
+
+                    // Зеркально обновляем внутреннюю модель триады для совместимости со старыми ctl-контурами
+                    const pack = facility.viewStack;
+                    if (Array.isArray(pack) && pack[nextIdx]) {
+                        const activeNode = pack[nextIdx];
+                        const activeMdl = activeNode?.mdl;
+
+                        if (activeMdl) {
+                            activeMdl._isDirty = true;
+                            if (Object.isExtensible(activeMdl) && activeMdl.activeModifierIdx !== undefined) {
+                                activeMdl.activeModifierIdx = nextIdx;
+                            }
+                            activeMdl._activeSubZone = nextIdx;
+                        }
+                    }
+
+                    tx.status = "INFRA_PROCESSED";
+
+                    if (facility.host?.virtualCanvasState) {
+                        facility.host.virtualCanvasState.isDirty = true;
+                    }
+                }
+
+                facility.isProcessing = false;
+                return true;
+            }
+
+            // =================================================================
+            // КОНТУР АБСОЛЮТНОГО ЗАМЕЩЕНИЯ №2: МЕТРИКИ СКРОЛЛБАРА (SYNC_SCROLLBAR_METRICS)
+            // =================================================================
+            if (previewIntent === "SYNC_SCROLLBAR_METRICS") {
+                facility.isProcessing = true;
+                
+                facility._head++;
+                const payload = tx.P3;
+                const m = facility.mdl;
+
+                if (payload && m) {
+                    const srcSlotIdNum = Math.floor(payload.slotIdNum || payload.slotId || 0) & 255;
+                    
+                    if (m.totalItemsRegistry && srcSlotIdNum > 0) {
+                        m.totalItemsRegistry[srcSlotIdNum] = Math.max(1, Math.floor(payload.totalItems || 1));
+                    }
+                    if (m.viewportOffsetRegistry && srcSlotIdNum > 0) {
+                        m.viewportOffsetRegistry[srcSlotIdNum] = Math.max(0, Math.floor(payload.viewportOffset || 0));
+                    }
+
+                    tx.status = "INFRA_PROCESSED";
+
+                    if (facility.host?.virtualCanvasState) {
+                        facility.host.virtualCanvasState.isDirty = true;
+                    }
+                }
+
+                facility.isProcessing = false;
+                return true; 
+            }
+
+            // =================================================================
+            // ПРИКЛАДНОЙ БИЗНЕС-КОНТУР (Вступает в силу строго для прикладных интентов)
+            // =================================================================
+            if (facility.isProcessing) return false;
+
+            facility.isProcessing = true;
+
+            while (facility._head < q.length) {
+                const liveTx = q[facility._head++];
+                if (!liveTx || liveTx.status !== "READY") continue;
+
+                const intent = String(liveTx.P2 || "").trim();
+                const payload = liveTx.P3;
+
                 if (facility.specificAdvanceWorker) {
-                    // Сквозной проброс tx, содержащего tx.O1 (origin), в ctl-слой прибора
-                    const mutated = facility.specificAdvanceWorker(facility, intent, payload, tx);
+                    const mutated = facility.specificAdvanceWorker(facility, intent, payload, liveTx);
                     if (mutated === true) {
                         isStateMutated = true;
                     }
@@ -58,12 +149,5 @@ export function createAbstractFacility(hostRef, slotIdStr, workerFn, componentTy
         }
     };
 
-    // Сам прибор остается extensible, его запечатает Единая Точка в slot_maker.js!
     return facility;
 }
-
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/core/smo/facility_pipeline.js
- * Время исправления: 03.09.2026 16:11:45 MSK
- */

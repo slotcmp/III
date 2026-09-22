@@ -1,50 +1,40 @@
-
 /**
  * @file src/core/smo/bus.js
- * @version 6.8.0-RELEASE-SMO-BUS-FLAT-REGISTERS-PERFECT
- * @description Реактивная тактовая шина СМО с изолированными плоскими регистрами темы и фокуса.
- * ИСПРАВЛЕН СБРОС ФОКУСА И МИГАНИЕ: Регистры вынесены из запечатанного appSettings в открытый плоский буфер.
- * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp / Zero Allocation.
+ * @version 7.0.0-RELEASE-SMO-BUS-IDD-RECONVERGED-STRIDE-8
+ * @description Размоноличенное ядро центральной тактовой шины СМО платформы SLOTCMP III.
+ * ИСПРАВЛЕНО: Поле ORIGIN переведено на 8-ячеечный кольцевой буфер истории прерываний.
+ * Выполнен в строгой парадигме PAC / DOD / IDD / 0% OOP / Zero Allocation / 0% GC.
  */
 
 import fs from "node:fs";
+import path from "node:path";
 import { writeCoreLogMessageInline } from "./logger_io.js";
 import { processEngineSingleTick } from "./gpss_engine_scan.js";
 import { auditHardwareTickPassive, purgeAuditFileAtStartup } from "./tick_sniffer.js";
+import { buildDynamicTabCoordinatesRegistry } from "../layout/balancer/tab_indexer.js"; 
 import { loadAppSettings } from "../app_config.js";
+import { traceTopLevelGpssGeneration } from "./debug/bus_storm_tracer.js";
 
-export const _busClockMetrics = {
-    hardwareTicksCount: 0,
-    generatedTransactsCount: 0,
-    currentPipelineDepth: 0,
-    lastExecutedIntent: "NONE"
-};
+// РЕЭКСПОРТ РАЗДЕЛЯЕМЫХ ОЗУ-РЕГИСТРОВ ДЛЯ ИСКЛЮЧЕНИЯ ESM-ТУПИКОВ
+export { _busClockMetrics, _gpssEngineState, _activeThemeState, _kernelContext } from "./bus/shared_state.js";
 
-export const _gpssEngineState = {
-    runtime: null,
-    facilitiesRegistry: new Map(),
-    facilitiesKeysCached: [], 
-    isScanActive: false,
-    _transactionGlobalCounter: 0,
-    activeAsyncTransactionsCount: 0,
-    activeSubZonesRegistry: Object.create(null)
-};
+import { _busClockMetrics, _gpssEngineState, _activeThemeState, _kernelContext, _INTENTS_PRIORITY_MAP } from "./bus/shared_state.js";
+import { initializeTransactionOrigins, pushOriginTrace } from "./bus/origin_tracer.js";
 
-// =================================================================
-// СУВЕРЕННЫЙ ПЛOСКИЙ БУФЕР ЖИВOГO СОСТOЯНИЯ WM (НЕУЯЗВИМ ДЛЯ ТYPEERROR)
-// =================================================================
-export const _activeThemeState = {
-    focusedSlotIdStr: "105",
-    currentBorderAnsiMask: "gray",
-    currentPassiveAnsiMask: "darkgray"
-};
-Object.preventExtensions(_activeThemeState);
+const CORE_LOG_PATH = path.resolve(process.cwd(), "./logs/smo_core.log");
+const AUDIT_TICKS_PATH = path.resolve(process.cwd(), "./smo_ticks.audit");
 
-export const _kernelContext = {
-    logPath: "./smo.log"
-};
-
+/**
+ * Очищает файлы системных логов при холодном старте ядра хоста
+ */
 export function purgeLogFileAtStartup() {
+    try {
+        fs.writeFileSync(path.resolve(process.cwd(), "./logs/smo_core.log"), "", "utf8");
+        fs.writeFileSync(path.resolve(process.cwd(), "./smo_ticks.audit"), "", "utf8");
+    } catch (e) {
+        if (process.stderr) process.stderr.write("[BUS_BOOT_FATAL] Сбой очистки дисковых журналов логов\n");
+    }
+
     const targetLogPath = _kernelContext.logPath;
     if (targetLogPath) {
         try { fs.writeFileSync(targetLogPath, "", "utf8"); } catch (e) {}
@@ -54,6 +44,9 @@ export function purgeLogFileAtStartup() {
     if (!isBypass) { purgeAuditFileAtStartup(); }
 }
 
+/**
+ * Регистрирует прибор СМО на тактовой шине
+ */
 export function registerGpssFacility(slotIdStr, facilityInstance) {
     if (!slotIdStr || !facilityInstance) return false;
     const key = String(slotIdStr);
@@ -63,32 +56,61 @@ export function registerGpssFacility(slotIdStr, facilityInstance) {
 }
 
 /**
- * Генерирует детерминированный транзакт СМО и ставит его в FIFO-очередь целевого прибора
+ * Верховный маршалер тактовых импульсов шины СМО с приоритетной сортировкой
  */
 export function generateGpssTransaction(targetChannelStr, intentStr, contextPayload, originSlotIdStr = "0") {
-    const chanKey = String(targetChannelStr || "");
-    const currentIntent = String(intentStr || "");
+    traceTopLevelGpssGeneration(targetChannelStr, intentStr, contextPayload);
+    const chanKey = String(targetChannelStr || "").trim();
+    const currentIntent = String(intentStr || "").trim();
     
     _gpssEngineState._transactionGlobalCounter++;
     _busClockMetrics.generatedTransactsCount = _gpssEngineState._transactionGlobalCounter;
     _busClockMetrics.lastExecutedIntent = currentIntent;
     
+    const priorityRank = _INTENTS_PRIORITY_MAP.get(currentIntent) ?? 1;
+
     const gpssTx = {
         id: _gpssEngineState._transactionGlobalCounter,
         P1: chanKey, 
         P2: currentIntent, 
         P3: contextPayload, 
         status: "READY",
-        O1: String(originSlotIdStr) 
+        originsHistory: null,
+        originsCursor: 0,
+        priority: priorityRank
     };
+    
+    // Аллоцируем 8-ячеистую бинарную карусель истории вместо одиночного O1
+    initializeTransactionOrigins(gpssTx);
+    pushOriginTrace(gpssTx, originSlotIdStr);
     
     Object.preventExtensions(gpssTx);
     
     const targetFacility = _gpssEngineState.facilitiesRegistry.get(chanKey);
     
-    if (targetFacility && Array.isArray(targetFacility.localQueue)) {
-        targetFacility.localQueue.push(gpssTx);
-    } 
+
+if (targetFacility && Array.isArray(targetFacility.localQueue)) {
+    const q = targetFacility.localQueue;
+    const head = Math.floor(targetFacility._head || 0);
+
+    // ГВАРД ХРОНОЛОГИИ ВВОДА: Если транзакт предназначен для Слота 10 (MOUSE) или 4 (KBD),
+    // приоритетная сортировка ПОЛНОСТЬЮ ОТКЛЮЧАЕТСЯ, гарантируя чистый FIFO-конвейер физических событий ОС
+    if (chanKey === "10" || chanKey === "4") {
+        q.push(gpssTx);
+    } else {
+        // Для прикладных и фоновых интентов сохраняем весовую сортировку TurboFan
+        let insertIdx = q.length;
+        for (let i = q.length - 1; i >= head; i--) {
+            if (q[i] && q[i].priority < priorityRank) {
+                insertIdx = i;
+            } else {
+                break;
+            }
+        }
+        if (insertIdx === q.length) q.push(gpssTx);
+        else q.splice(insertIdx, 0, gpssTx);
+    }
+} 
     else if (targetFacility && typeof targetFacility.dispatch === "function") {
         targetFacility.dispatch(currentIntent, gpssTx);
     }
@@ -97,6 +119,9 @@ export function generateGpssTransaction(targetChannelStr, intentStr, contextPayl
     return true;
 }
 
+/**
+ * Центральный процессор продвижения тактов шины
+ */
 export function executeReactivePulsePipeline() {
     _busClockMetrics.hardwareTicksCount++;
     _busClockMetrics.currentPipelineDepth++;
@@ -104,7 +129,9 @@ export function executeReactivePulsePipeline() {
     const configData = loadAppSettings();
     const isBypass = configData ? (configData.bAuditTicksBypass === true) : false;
 
-    if (!isBypass) auditHardwareTickPassive("BEFORE_ADVANCE");
+    if (!isBypass) {
+        auditHardwareTickPassive("BEFORE_ADVANCE", _gpssEngineState, _busClockMetrics, writeCoreLogMessageInline);
+    }
 
     if (_gpssEngineState.isScanActive) {
         _busClockMetrics.currentPipelineDepth--;
@@ -113,7 +140,11 @@ export function executeReactivePulsePipeline() {
     _gpssEngineState.isScanActive = true;
     
     const kernel = _gpssEngineState.runtime;
-    if (kernel) processEngineSingleTick(kernel);
+    
+    if (kernel) {
+        
+        processEngineSingleTick(kernel);
+    }
     
     _gpssEngineState.isScanActive = false;
 
@@ -121,14 +152,8 @@ export function executeReactivePulsePipeline() {
         kernel.executeViewportBlit();
     }
 
-    if (!isBypass) auditHardwareTickPassive("AFTER_ADVANCE");
+    if (!isBypass) {
+        auditHardwareTickPassive("AFTER_ADVANCE", _gpssEngineState, _busClockMetrics, writeCoreLogMessageInline);
+    }
     _busClockMetrics.currentPipelineDepth--;
 }
-
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/core/smo/bus.js
- * Время изменения: 06.09.2026 17:58:12 MSK
- */
-
-

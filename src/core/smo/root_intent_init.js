@@ -1,46 +1,48 @@
 /**
  * @file src/core/smo/root_intent_init.js
- * @version 6.4.5-RELEASE-SMO-ROOT-LAZY-VFS-FORCE-DIRTY-LIVE
+ * @version 7.0.1-RELEASE-SMO-ROOT-INTENT-INIT-ROOT-INIT-PATH-FIXED
  * @description Вспомогательный процедурный блок инициализации и отложенного монтажа Канала 0.
- * ИСПРАВЛЕНО ОТСУТСТВИЕ СЕТКИ: Добавлен принудительный стартовый импульс EXECUTE_RENDER при финализации загрузки.
- * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
+ * ИСПРАВЛЕНО: Пути импорта синхронизированы с новой изолированной папкой intents/root_init/.
+ * Выполнен в строгой парадигме PAC / DOD / IDD / 0% OOP.
  */
 
 import { executeDeferredSynchronization } from "../slot_maker.js";
 import { generateGpssTransaction } from "./bus.js";
 
-export function processInitIntent(unitState, r) {
-    if (!unitState || !r) return false;
-    if (unitState.isSystemFullyBooted === true) return false;
-    unitState.isSystemFullyBooted = true; 
+// ИМПОРТ ИЗ ИЗОЛИРОВАННОЙ ДИРЕКТОРИИ ROOT_INIT
+import { reduceInitIntent } from "./intents/root_init/init_pulse_handler.js";
+import { reduceLoadSequenceCompleted } from "./intents/root_init/load_complete_handler.js";
 
-    // Запускаем расчет флекс-разметки на Канале 9
-    generateGpssTransaction("11", "BOOT_LAYOUT_TREE", null, "0");
-    unitState.isStageHydratedAndReady = true;
-    return true;
+
+/**
+ * Проводник первичного такта холодного пуска хоста
+ */
+export function processInitIntent(unitState, r) {
+    return reduceInitIntent(unitState, r);
 }
 
+/**
+ * Центральный распределитель отложенной IoC-синхронизации триад
+ */
 export function processDeferredSyncIntent(unitState, payload) {
     if (!unitState || !unitState.hub || !payload) return false;
     const kernel = unitState.hub;
     
-    // Перехватываем интент завершения IoC-загрузки абсолютно всех панелей разметки
-    if (payload.intent === "LOAD_SEQUENCE_COMPLETED") {
-        if (kernel.virtualCanvasState) {
-            // Принудительно взводим флаг грязи UHD-холста
-            kernel.virtualCanvasState.isDirty = true;
-        }
-        // ВЫСТРЕЛИВАЕМ СТАРТОВЫЙ ИМПУЛЬС ВЫЖИГА СЕТКИ WINDOW MANAGER
-        generateGpssTransaction("1", "EXECUTE_RENDER", null, "0");
-        return true;
+    const intentStr = String(payload.intent || "");
+
+    // 1. ПЕРЕХВАТ ИНТЕНТА ГОТОВНОСТИ ТОПОЛОГИИ ВЕРХНЕГО УРОВНЯ
+    if (intentStr === "LOAD_SEQUENCE_COMPLETED") {
+        return reduceLoadSequenceCompleted(kernel);
     }
 
+    // 2. ДЕЛИКАТНЫЙ МОНТАЖ СТРУКТУР ПАНЕЛЕЙ В РЕЕСТР ЯДРА
     const success = executeDeferredSynchronization(kernel, payload);
     
     if (success) {
         const slotIdStr = String(payload.slotId || "");
         const compTypeStr = String(payload.cleanDomain || "");
         
+        // Автономный VFS-контур инициализации Проводников каталогов
         if (compTypeStr === "explorer") {
             const configData = kernel.model?.logicalState?.appSettings;
             const pathKey = "s" + slotIdStr + "_paths";
@@ -71,7 +73,7 @@ export function processDeferredSyncIntent(unitState, payload) {
             kernel.virtualCanvasState.isDirty = true;
         }
 
-        // Пинаем рендер-барьер после монтажа каждого отдельного прибора
+        // Пинаем финальный рендер-барьер после монтажа каждого прибора отдельно
         generateGpssTransaction("1", "EXECUTE_RENDER", null, "0");
     }
     return success;

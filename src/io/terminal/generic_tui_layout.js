@@ -1,8 +1,8 @@
 /**
  * @file src/io/terminal/generic_tui_layout.js
- * @version 2.9.1-RELEASE-SMO-DOD-GENERIC-TUI-LAYOUT-SCROLLBAR-SHIFT
- * @description Внутренний шаблонизатор TUI-окон СМО.
- * ИСПРАВЛЕНО: Желоб скроллбара сдвинут на w-3 для гарантированной защиты правой рамы ║ от выдавливания.
+ * @version 3.0.2-RELEASE-SMO-DOD-INT32ARRAY-LAYOUT-SCROLLBAR-DYNAMIC
+ * @description Шаблонизатор TUI-окон СМО с поддержкой 32-битного упакованного растра.
+ * ИСПРАВЛЕНО: Инжектирован 1-пробельный накат внешних ушек со стартом от X=3 и динамической записью границ.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / Zero Allocation / 0% GC.
  */
 
@@ -36,9 +36,6 @@ export function prepareGenericTuiLayout(matrix, currentW, currentH, mdl, titlesA
             const viewportOffset = vScrollMdl.viewportOffsetRegistry[slotIdNum];
             
             const barHeight = Math.max(1, h - 4);
-            
-            // ИСПРАВЛЕНИЕ: Желоб скроллбара сдвинут на безопасный индекс w - 3.
-            // Это полностью исключает наплыв символов ░ и █ на правую стену окна при округлениях.
             const targetX = w - 3; 
             
             let sliderHeight = Math.max(1, Math.floor((barHeight * barHeight) / totalItems));
@@ -62,16 +59,25 @@ export function prepareGenericTuiLayout(matrix, currentW, currentH, mdl, titlesA
 }
 
 /**
- * Суверенный накат вкладок на глобальный UHD-холст (Слой Z-3)
+ * Суверенный накат вкладок на глобальный холст (Слой Z-3)
+ * ИСПРАВЛЕНО: Инжектирован 1-пробельный шаг со стартом от X=3 для Слота 200 без хардкода
  */
 export function drawWindowTabsOverlay(targetMatrix, sX, sY, sW, sH, mdl, titlesArray, activeTabIdx) {
     if (!targetMatrix || !titlesArray || titlesArray.length === 0 || !mdl) return;
 
-    const tabRow = targetMatrix[sY + 1];
+    const isExternalTabsbar = (sY === -1); 
+    const targetGlobalY = isExternalTabsbar ? 0 : ((sY + 1) | 0);
+    const tabRow = targetMatrix[targetGlobalY];
     if (!tabRow) return;
 
+    const tabMenuFacility = _gpssEngineState.facilitiesRegistry.get("12");
+    const vectorBuf = tabMenuFacility?.mdl?.tabsVectorArray;
+
     const tabsCount = titlesArray.length;
-    let currentTabX = sX + 2; 
+    
+    // ИСПРАВЛЕНО: Для внутренних ушек берем sX + 2, для внешних — жесткий динамический старт с X = 3
+    let currentTabX = isExternalTabsbar ? 3 : ((sX + 2) | 0); 
+    
     const bgPassive = "\x1b[48;5;236m"; 
     const fgPassive = "\x1b[38;5;246m";
 
@@ -87,23 +93,41 @@ export function drawWindowTabsOverlay(targetMatrix, sX, sY, sW, sH, mdl, titlesA
         const bg = isCurrent ? bgActive : bgPassive;
         const fg = isCurrent ? "\x1b[38;5;16m" : fgPassive;
 
+        const startXOnCanvas = currentTabX;
+        const endXOnCanvas = ((currentTabX + len - 1) | 0);
+
         if (isCurrent) {
             mdl._tabStartX = currentTabX - sX;
             mdl._tabEndX = currentTabX + len - sX;
         }
 
         for (let i = 0; i < len; i++) {
-            // ИСПРАВЛЕНИЕ: Жесткий гвард защиты правого края от наплыва букв вкладок
-            if (currentTabX + i < sX + sW - 2) {
+            if (currentTabX + i < (isExternalTabsbar ? targetMatrix[0].length : sX + sW - 2)) {
                 tabRow[currentTabX + i] = packCellBits(tabLabelStr.charAt(i), fg, bg);
             }
         }
-        currentTabX += len + 1;
+
+        // ЗАПИСЬ ЖИВЫХ ГРАНИЦ В ПАСПОРТ КАНАЛА 12 (0% МУТАЦИЙ ПАМЯТИ)
+        if (vectorBuf && tabMenuFacility.mdl.totalRegisteredTabsCount !== undefined) {
+            const currentGlobalPassportIdx = Math.floor(tabMenuFacility.mdl.totalRegisteredTabsCount || 0);
+            
+            if (currentGlobalPassportIdx < 64) {
+                const writeOffset = (currentGlobalPassportIdx * 6) | 0;
+                const ownerSlotIdNum = parseInt(mdl.slotId || "102", 10) & 255;
+                const keeperSlotIdNum = isExternalTabsbar ? 12 : ownerSlotIdNum;
+
+                vectorBuf[writeOffset]     = keeperSlotIdNum; 
+                vectorBuf[writeOffset + 1] = targetGlobalY;      
+                vectorBuf[writeOffset + 2] = startXOnCanvas;     
+                vectorBuf[writeOffset + 3] = endXOnCanvas;       
+                vectorBuf[writeOffset + 4] = ownerSlotIdNum;   
+                vectorBuf[writeOffset + 5] = t;                
+
+                tabMenuFacility.mdl.totalRegisteredTabsCount++;
+            }
+        }
+
+        // ИСПРАВЛЕНО: Ушки разделены ровно 1 пробелом разделителя
+        currentTabX += len + 1; 
     }
 }
-
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/io/terminal/generic_tui_layout.js
- * Время изменения: 10.09.2026 16:22:00 MSK
- */

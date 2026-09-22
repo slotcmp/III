@@ -1,50 +1,40 @@
 /**
  * @file src/core/smo/mouse_worker_unit.js
- * @version 4.0.1-RELEASE-SMO-SYSTEM-MOUSE-ADMIN-OBVES-FIXED
- * @description Системный СМО-прибор Слота 10 (Control-контур).
- * ИСПРАВЛЕНЫ КРАШИ И СКРОЛЛ: Вызов инвалидации переведен на контекст ядра, добавлен перехват Канала 14.
- * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
+ * @version 6.1.0-RELEASE-SMO-MOUSE-WORKER-UNIT-SCROLL-PRIORITY-STABLE
+ * @description Системный СМО-прибор Слота 10 (Оркестратор очереди Канала 10).
+ * ИСПРАВЛЕНО: Инжектирован жесткий безусловный приоритет скролла над табами для защиты Канала 14.
+ * Выполнен в строгой парадигме PAC / DOD / IDD / 0% OOP / Zero Allocation / 0% GC.
  */
 
 import { generateGpssTransaction, _gpssEngineState } from "./bus.js";
+import { calculateMouseWindowHit } from "./mouse_intents/mouse_hit_test.js";
+import { processFrameOrSingleRowIntent } from "./mouse_intents/mouse_frame_handler.js";
 
-/**
- * Фабрика сборки мономорфной структуры системного прибора мыши Слота 10
- */
+// ИСПРАВЛЕНИЕ ПУТЕЙ ESM: Сбрасываем лишний оффсет папки. 
+import { evaluateMouseFocusIntent } from "./mouse_intents/focus_trigger.js";
+import { routeMouseScrollIntent } from "./mouse_intents/scrollbar_router.js";
+import { routeMouseTabsIntent } from "./mouse_intents/tabsbar_router.js"; 
+
+// Преаллоцированный мономорфный ОЗУ-регистр для результатов хит-теста (0% GC)
+const _localHitResultRef = { hitSlotIdStr: "", localX: 0, localY: 0, w: 0, h: 0 };
+Object.preventExtensions(_localHitResultRef);
+
 export function assembleMouseUnit(kernelRef) {
     if (!kernelRef) return null;
-
     const mouseFacility = {
-        host: kernelRef,
-        slotId: "10",
-        localQueue: [],
-        _head: 0,
-        isProcessing: false,
-        
-        componentType: "mouse_unit",
-        displayIndex: 10,
-        
-        dispatch: null,
-        advanceFacility: null
+        host: kernelRef, slotId: "10", localQueue: [], _head: 0, isProcessing: false,
+        componentType: "mouse_unit", displayIndex: 10, dispatch: null, advanceFacility: null
     };
-
     mouseFacility.dispatch = (actionTypeStr, gpssTx) => {
         if (!gpssTx) return false;
         mouseFacility.localQueue.push(gpssTx);
         return true;
     };
-
-    mouseFacility.advanceFacility = () => {
-        return advanceMouseQueueFacility(mouseFacility);
-    };
-
+    mouseFacility.advanceFacility = () => { return advanceMouseQueueFacility(mouseFacility); };
     Object.preventExtensions(mouseFacility);
     return mouseFacility;
 }
 
-/**
- * Конвейер продвижения и хит-теста тактовой очереди прерываний мыши
- */
 export function advanceMouseQueueFacility(unitState) {
     if (!unitState || unitState.isProcessing) return false;
     
@@ -55,8 +45,7 @@ export function advanceMouseQueueFacility(unitState) {
     let isMutated = false;
 
     const kernel = unitState.host;
-    const geoMap = kernel?.calculatedGeoMap;
-    if (!kernel || !geoMap) {
+    if (!kernel || !kernel.calculatedGeoMap) {
         unitState.isProcessing = false;
         return false;
     }
@@ -72,121 +61,81 @@ export function advanceMouseQueueFacility(unitState) {
         const globalY = Math.floor(mousePayload.y || 0);
         const mouseAction = String(mousePayload.action || "MOUSE_CLICK");
 
-        let hitSlotIdStr = "";
-        let localClickX = 0;
-        let localClickY = 0;
+        // Вызов размоноличенного калькулятора координат луча
+        calculateMouseWindowHit(globalX, globalY, kernel.calculatedGeoMap, activeFacilitiesKeys, _localHitResultRef);
+        
+        const hitId = _localHitResultRef.hitSlotIdStr;
+        if (hitId.length === 0) continue;
 
-        for (let i = 0; i < activeFacilitiesKeys.length; i++) {
-            const slotId = activeFacilitiesKeys[i];
-            const slotIdNum = parseInt(slotId, 10);
-            if (isNaN(slotIdNum) || slotIdNum < 100) continue;
-            
-            const geo = geoMap[slotId];
-            if (!geo) continue;
+        const lX = _localHitResultRef.localX;
+        const lY = _localHitResultRef.localY;
+        const sW = _localHitResultRef.w;
+        const sH = _localHitResultRef.h;
 
-            const xStart = Math.floor(geo.x || 0);
-            const yStart = Math.floor(geo.y || 0);
-            const wWidth = Math.floor(geo.w || 0);
-            const hHeight = Math.floor(geo.h || 0);
+        const isWheelEvent = (mouseAction === "WHEEL_UP" || mouseAction === "WHEEL_DOWN");
 
-            if (globalX >= xStart && globalX < xStart + wWidth &&
-                globalY >= yStart && globalY < yStart + hHeight) {
-                hitSlotIdStr = slotId;
-                localClickX = globalX - xStart;
-                localClickY = globalY - yStart;
-                break; 
+        // ШАГ 1: ВЫЗОВ ВНЕШНЕГО РЕДЬЮСЕРА ФОКУСА (ГЕНЕРАЦИЯ SET_SLOT_FOCUS НА КАНАЛ 0)
+        const isFocusTriggered = evaluateMouseFocusIntent(hitId, mouseAction, kernel);
+        if (isFocusTriggered === true) {
+            isMutated = true;
+        }
+
+        // ШАГ 2: Вызов размоноличенного редьюсера рамок верхнего уровня (Слот 200)
+        const isInteracted = processFrameOrSingleRowIntent(hitId, mouseAction, lX, lY, sW, sH, kernel);
+        if (isInteracted === true) {
+            isMutated = true;
+            continue; // Сигнал поглощен оверлеем ушек
+        }
+
+        // =================================================================
+        // ШАГ 3 (ИСПРАВЛЕНО): БЕЗУСЛОВНЫЙ ВЫСШИЙ ПРИОРИТЕТ КОЛЕСИКА (SCROLL)
+        // =================================================================
+        // Если зафиксировано вращение колесика мыши в любой координате Y
+        // (включая линию вкладок lY === 1), мгновенно маршалируем интент на Канал 14,
+        // полностью запрещая Каналу 12 перехватывать такт!
+        if (isWheelEvent === true) {
+            const isScrollInteracted = routeMouseScrollIntent(hitId, mouseAction, lX, lY, sW, sH);
+            if (isScrollInteracted === true) {
+                isMutated = true;
+                continue; // Импульс колесика успешно ушел скроллировать файлы
             }
         }
 
-        if (hitSlotIdStr.length > 0) {
-            const geo = geoMap[hitSlotIdStr];
-            const w = geo ? Math.floor(geo.w || 0) : 0;
+        // ШАГ 4: ВЫЗОВ ВНЕШНЕГО РЕДЬЮСЕРА ВНУТРЕННИХ ВКЛАДОК ОКНА (LINE Y === 1)
+        // Контур вкладок Канала 12 теперь просыпается СТРОГО для кликов левой кнопкой мыши
+        if (isWheelEvent === false) {
+            // Внутри src/core/smo/mouse_worker_unit.js (Шаг 4):
+        const isTabInteracted = routeMouseTabsIntent(hitId, mouseAction, lX, lY, globalY); // ◄── ПРОБРАСЫВАЕМ globalY
 
-            // =================================================================
-            // ПРЕЦИЗИОННЫЙ ПЕРЕХВАТ ИНФРАСТРУКТУРНОГО ОБВЕСА НА ЛИНИИ Y = 0
-            // =================================================================
-            if (localClickY === 0 && w > 0) {
-                if (localClickX >= 3 && localClickX <= 16) {
-                    generateGpssTransaction("108", "ADD_LOG_ENTRY", "[SYSTEM_WM] Клик по паспорту рамы. Ротация стека Слота: " + hitSlotIdStr + "\n", "10");
-                    generateGpssTransaction(hitSlotIdStr, "ROTATE_SLOT_STACK", null, "10");
-                    isMutated = true;
-                    continue; 
-                }
-
-                const xCollapse = w - 10;
-                const xMaximize = w - 7;
-                const xClose    = w - 4;
-
-                if (localClickX >= xCollapse && localClickX <= xCollapse + 2) {
-                    generateGpssTransaction("108", "ADD_LOG_ENTRY", "[SYSTEM_WM] Инициирован интент COLLAPSE_SLOT на Слот: " + hitSlotIdStr + "\n", "10");
-                    generateGpssTransaction("9", "COLLAPSE_SLOT_TOGGLE", { targetSlotId: hitSlotIdStr }, "10");
-                    isMutated = true;
-                    continue;
-                }
-
-                if (localClickX >= xMaximize && localClickX <= xMaximize + 2) {
-                    generateGpssTransaction("108", "ADD_LOG_ENTRY", "[SYSTEM_WM] Инициирован интент MAXIMIZE_SLOT на Слот: " + hitSlotIdStr + "\n", "10");
-                    generateGpssTransaction("9", "MAXIMIZE_SLOT_TOGGLE", { targetSlotId: hitSlotIdStr }, "10");
-                    isMutated = true;
-                    continue;
-                }
-
-                if (localClickX >= xClose && localClickX <= xClose + 2) {
-                    generateGpssTransaction("108", "ADD_LOG_ENTRY", "[SYSTEM_WM] Инициирован интент DESTROY_SLOT на Слот: " + hitSlotIdStr + "\n", "10");
-                    generateGpssTransaction("0", "DESTROY_SLOT", { targetSlotId: hitSlotIdStr }, "10");
-                    isMutated = true;
-                    continue;
-                }
-            }
-
-            // Переключение фокуса ввода через контекстный метод ядра хоста
-            const currentFocusedId = String(kernel.model.logicalState.focusedSlotId || "");
-            if (hitSlotIdStr !== currentFocusedId) {
-                kernel.model.logicalState.focusedSlotId = hitSlotIdStr;
-                if (kernel && typeof kernel.forceInvalidateShadowCanvas === "function") {
-                    kernel.forceInvalidateShadowCanvas();
-                }
-                if (kernel.virtualCanvasState) kernel.virtualCanvasState.isDirty = true;
-                
-                generateGpssTransaction("108", "ADD_LOG_ENTRY", "[SYSTEM_MOUSE] Фокус ввода переведен на Слот: " + hitSlotIdStr + "\n", "10");
-                generateGpssTransaction("1", "EXECUTE_RENDER", null, "10");
+            if (isTabInteracted === true) {
                 isMutated = true;
+                continue; // Сигнал переключения ушек ушел на Канал 12
             }
+        }
 
-            // Транслируем клик в прикладной контур только если он опустился ниже линии Y=0
-            if (localClickY > 0) {
-                const relativePayload = {
-                    globalX: globalX, globalY: globalY,
-                    localX: localClickX, localY: localClickY,
-                    action: mouseAction
-                };
-                Object.preventExtensions(relativePayload);
-
-                // ИСПРАВЛЕНИЕ: Перехватываем колесико и клики по желобу скроллбара (X === w - 2) на Канал 14
-                const isWheel = (mouseAction === "WHEEL_UP" || mouseAction === "WHEEL_DOWN");
-                const isScrollClick = (mouseAction === "MOUSE_CLICK" && localClickX === w - 2);
-
-                if (isWheel || isScrollClick) {
-                    let scrollIntentStr = "SCROLL_CONTENT_DOWN";
-                    if (isWheel) {
-                        scrollIntentStr = (mouseAction === "WHEEL_UP") ? "SCROLL_CONTENT_UP" : "SCROLL_CONTENT_DOWN";
-                    } else {
-                        scrollIntentStr = (localClickY < Math.floor(geo.h / 2)) ? "SCROLL_CONTENT_UP" : "SCROLL_CONTENT_DOWN";
-                    }
-                    generateGpssTransaction("14", scrollIntentStr, { targetSlotId: hitSlotIdStr, localX: localClickX, localY: localClickY }, "10");
-                } else {
-                    generateGpssTransaction(hitSlotIdStr, mouseAction, relativePayload, "10");
-                }
+        // ШАГ 5: ВЫЗОВ ВНЕШНЕГО РЕДЬЮСЕРА СКРОЛЛБАРОВ ДЛЯ КЛИКОВ ПО ЖЕЛОБУ (MOUSE_DOWN НА ПРАВОЙ РАМКЕ)
+        if (isWheelEvent === false) {
+            const isScrollInteracted = routeMouseScrollIntent(hitId, mouseAction, lX, lY, sW, sH);
+            if (isScrollInteracted === true) {
                 isMutated = true;
+                continue; // Клик по полосе прокрутки ушел на Канал 14
             }
+        }
+
+        // ШАГ 6: ПРОБРОС ОБЫЧНОГО КОНТЕНТНОГО КЛИКА В РАБОЧУЮ ЗОНУ ПАНЕЛИ (Y >= 3)
+        if (lY >= 3 && isWheelEvent === false) {
+            const relativePayload = { globalX: globalX, globalY: globalY, localX: lX, localY: lY, action: mouseAction };
+            Object.preventExtensions(relativePayload);
+            
+            // Направляем транзакт на прикладной Слот-адресат (102, 103, 106, 108)
+            generateGpssTransaction(hitId, mouseAction, relativePayload, "10");
+            isMutated = true;
         }
     }
 
     if (unitState._head === q.length) {
-        q.length = 0;
-        unitState._head = 0;
+        q.length = 0; unitState._head = 0;
     }
-
     unitState.isProcessing = false;
     return isMutated;
 }

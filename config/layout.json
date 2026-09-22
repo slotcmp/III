@@ -5,7 +5,7 @@
   "width": "100%",
   "height": "100%",
   "children": [
-{
+    {
       "id": "200",
       "type": "slot",
       "component": "tabsbar",
@@ -14,7 +14,25 @@
       "height": "1",
       "enabled": true,
       "collapsed": false,
-      "contentVisible": true
+      "contentVisible": true,
+      "tabs": [
+        {
+          "id": "f_default",
+          "title": "DEFAULT"
+        },
+        {
+          "id": "f_ctrl",
+          "title": "CTRL"
+        },
+        {
+          "id": "f_shift",
+          "title": "SHIFT"
+        },
+        {
+          "id": "f_alt",
+          "title": "ALT"
+        }
+      ]
     },
     {
       "id": "101",
@@ -28,8 +46,14 @@
       "collapsed": false,
       "contentVisible": true,
       "tabs": [
-        { "id": "t1", "title": "RULER" },
-        { "id": "t2", "title": "MONITOR" }
+        {
+          "id": "t1",
+          "title": "RULER"
+        },
+        {
+          "id": "t2",
+          "title": "MONITOR"
+        }
       ]
     },
     {
@@ -50,16 +74,28 @@
           "enabled": true,
           "collapsed": false,
           "contentVisible": true,
-          "tabs_in":true,
+          "tabs_in": true,
           "tabs": [
-            { "id": "t1", "title": "SYS", "path": "C:/Windows" },
-            { "id": "t2", "title": "SRC", "path": "C:/slotcmp/III/src" },
+            {
+              "id": "t1",
+              "title": "SYS",
+              "path": "C:/Windows"
+            },
+            {
+              "id": "t2",
+              "title": "SRC",
+              "path": "C:/slotcmp/III/src"
+            },
             {
               "id": "t3",
               "title": "MOD",
               "path": "C:/slotcmp/III/src/modules"
             },
-            { "id": "t4", "title": "LOG", "path": "C:/slotcmp/III/config" }
+            {
+              "id": "t4",
+              "title": "LOG",
+              "path": "C:/slotcmp/III/config"
+            }
           ]
         },
         {
@@ -73,15 +109,25 @@
           "enabled": true,
           "collapsed": false,
           "contentVisible": true,
-          "tabs_in":true,
+          "tabs_in": true,
           "tabs": [
-            { "id": "t1", "title": "ROOT", "path": "C:/" },
-            { "id": "t2", "title": "CONF", "path": "C:/slotcmp/III/config" },
-            { "id": "t3", "title": "WORK", "path": "C:/slotcmp/III" }
+            {
+              "id": "t1",
+              "title": "ROOT",
+              "path": "C:/"
+            },
+            {
+              "id": "t2",
+              "title": "CONF",
+              "path": "C:/slotcmp/III/config"
+            },
+            {
+              "id": "t3",
+              "title": "WORK",
+              "path": "C:/slotcmp/III"
+            }
           ]
         },
-      
-
         {
           "id": "right_sidebar",
           "type": "container",
@@ -100,8 +146,13 @@
               "enabled": true,
               "collapsed": false,
               "contentVisible": true,
-              "tabs_in":true,
-              "tabs": [{ "id": "t1", "title": "PALETTE" }]
+              "tabs_in": true,
+              "tabs": [
+                {
+                  "id": "t1",
+                  "title": "PALETTE"
+                }
+              ]
             }
           ]
         }
@@ -118,85 +169,84 @@
       "collapsed": false,
       "contentVisible": true
     },
-
-      {
-          "id": "104",
-          "type": "slot",
-          "component": "fnbar",
-          "displayIndex": 8,
-          "width": "100%",
-          "height": "1",
-          "enabled": true,
-          "collapsed": false,
-          "contentVisible": true,
-          "activeStackIdx": 0,
-          "tabs": [
-            {
-              "id": "f_default",
-              "title": "DEFAULT",
-              "keys": [
-                "Help",
-                "Menu",
-                "View",
-                "Edit",
-                "Copy",
-                "RenMov",
-                "MkDir",
-                "Delete",
-                "Conf",
-                "Exit"
-              ]
-            },
-            {
-              "id": "f_ctrl",
-              "title": "CTRL",
-              "keys": [
-                "Left",
-                "Right",
-                "Ver",
-                "Edit",
-                "Print",
-                "Link",
-                "Find",
-                "History",
-                "Video",
-                "Tree"
-              ]
-            },
-            {
-              "id": "f_shift",
-              "title": "SHIFT",
-              "keys": [
-                "Help",
-                "User",
-                "Cmd",
-                "Arch",
-                "Copy",
-                "RenMov",
-                "MkDir",
-                "Delete",
-                "Save",
-                "Last"
-              ]
-            },
-            {
-              "id": "f_alt",
-              "title": "ALT",
-              "keys": [
-                "Left",
-                "Right",
-                "View",
-                "Hex",
-                "Pack",
-                "Unpack",
-                "Find",
-                "History",
-                "Video",
-                "Tree"
-              ]
-            }
+    {
+      "id": "104",
+      "type": "slot",
+      "component": "fnbar",
+      "displayIndex": 8,
+      "width": "100%",
+      "height": "1",
+      "enabled": true,
+      "collapsed": false,
+      "contentVisible": true,
+      "activeStackIdx": 0,
+      "tabs": [
+        {
+          "id": "f_default",
+          "title": "DEFAULT",
+          "keys": [
+            "Help",
+            "Menu",
+            "View",
+            "Edit",
+            "Copy",
+            "RenMov",
+            "MkDir",
+            "Delete",
+            "Conf",
+            "Exit"
           ]
         },
+        {
+          "id": "f_ctrl",
+          "title": "CTRL",
+          "keys": [
+            "Left",
+            "Right",
+            "Ver",
+            "Edit",
+            "Print",
+            "Link",
+            "Find",
+            "History",
+            "Video",
+            "Tree"
+          ]
+        },
+        {
+          "id": "f_shift",
+          "title": "SHIFT",
+          "keys": [
+            "Help",
+            "User",
+            "Cmd",
+            "Arch",
+            "Copy",
+            "RenMov",
+            "MkDir",
+            "Delete",
+            "Save",
+            "Last"
+          ]
+        },
+        {
+          "id": "f_alt",
+          "title": "ALT",
+          "keys": [
+            "Left",
+            "Right",
+            "View",
+            "Hex",
+            "Pack",
+            "Unpack",
+            "Find",
+            "History",
+            "Video",
+            "Tree"
+          ]
+        }
+      ]
+    },
     {
       "id": "108",
       "type": "slot",

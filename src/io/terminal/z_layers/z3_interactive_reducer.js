@@ -1,19 +1,17 @@
 /**
  * @file src/io/terminal/z_layers/z3_interactive_reducer.js
- * @version 2.0.2-RELEASE-SMO-Z3-INTERACTIVE-DECLARATIVE-BUTTONS-FIX
- * @description Автономная DOD-процедура наката управляющих кнопок и вкладок (Слой Z-3).
- * ИСПРАВЛЕН СЛОТ 100: Системные кнопки рамы отключены на основе декларативной высоты из JSON.
- * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp / Zero Allocation / 0% GC.
+ * @version 2.0.6-RELEASE-SMO-Z3-ATOMIC-PASSPORT-RESET
+ * @description Автономная DOD-процедура послойного наката интерактивного обвеса (Слой Z-3).
+ * ИСПРАВЛЕНО: Счетчик и ОЗУ-вектор паспортов Канала 12 зачищаются строго на старте такта Z-3.
+ * Выполнен в строгой парадигме PAC / DOD / 0% OOP / Zero Allocation / 0% GC.
  */
 
 import { _gpssEngineState } from "../../../core/smo/bus.js";
-import { drawWindowButtonsOverlay } from "../viewport_frame_drawer.js";
+import { drawWindowButtonsOverlay } from "../frame_decorator.js";
 import { drawWindowTabsOverlay } from "../generic_tui_layout.js";
 
 const _staticTitlesStringsCacheArray = new Array(16);
 const _staticDodNodesStack = new Array(64);
-
-let _staticTabsbarXTracker = 0;
 
 /**
  * Осуществляет накат интерактивного обвеса самым верхним Z-приоритетом кадра
@@ -21,12 +19,22 @@ let _staticTabsbarXTracker = 0;
 export function reduceInteractiveLayer(targetM, host, geoMap, allRegisteredKeys, lenKeys) {
     if (!host || !geoMap || !targetM) return;
 
-    const tabsbarGeo = geoMap["200"];
-    _staticTabsbarXTracker = tabsbarGeo ? Math.floor(tabsbarGeo.x || 0) + 1 : 1;
+    // =================================================================
+    // СУВЕРЕННЫЙ DOD-СБРОС КАРЕТКИ ПЕРЕД НАЧАЛОМ ЗАПОЛНЕНИЯ ВЕКТОРA
+    // =================================================================
+    const tabMenuFacility = _gpssEngineState.facilitiesRegistry.get("12");
+    const tabMenuMdl = tabMenuFacility ? tabMenuFacility.mdl : null;
+    if (tabMenuMdl) {
+        tabMenuMdl.totalRegisteredTabsCount = 0; // Сброс каретки в ноль строго в домене Слота 12
+        if (tabMenuMdl.tabsVectorArray) {
+            tabMenuMdl.tabsVectorArray.fill(0);  // Очистка бинарной ОЗУ-памяти 384 ячеек
+        }
+    }
 
     for (let i = 0; i < lenKeys; i++) {
         const slotId = allRegisteredKeys[i];
-        if (slotId === "0" || slotId === "1" || slotId === "4" || slotId === "9" || slotId === "10" || slotId === "11" || slotId === "12" || slotId === "200") {
+        
+        if (slotId === "0" || slotId === "1" || slotId === "4" || slotId === "9" || slotId === "10" || slotId === "11" || slotId === "14") {
             continue;
         }
 
@@ -68,22 +76,17 @@ export function reduceInteractiveLayer(targetM, host, geoMap, allRegisteredKeys,
             _staticDodNodesStack[--stackPtr] = null;
         }
 
-        // =================================================================
-        // ИСПРАВЛЕНИЕ: БЛOКИРОВКА СИСТЕМНЫХ КНОПОК ДЛЯ ПЛОСКИХ СЛОТОВ
-        // =================================================================
-        // Проверяем высоту напрямую из JSON. Если в манифесте задана 1 строка —
-        // прибор не имеет рамы, и накат кнопок [-][▲][×] полностью блокируется.
         const declarativeHeight = layoutNodeRef ? parseInt(layoutNodeRef.height || "0", 10) : 0;
 
+        // 1. ОТРИСОВКА КНОПОК ДЛЯ ОБЪЕМНЫХ ОКOН
         if (declarativeHeight > 1 && sH > 1) {
             drawWindowButtonsOverlay(targetM, sX, sY, sW, sH, slotId);
         }
 
-        // 2. РАСПРЕДЕЛЕНИЕ ВКЛАДОК ПО ПРАВИЛУ ТABS_IN
+        // 2. ДЕКЛАРАТИВНЫЙ НАКАТ ВКЛАДОК НА ОСНОВЕ МОДЕЛИ LAYOUT.JSON
         const activeIdx = Math.max(0, Math.floor(facility.activeStackIdx || 0));
         if (facility.viewStack) {
             const node = Array.isArray(facility.viewStack) ? facility.viewStack[activeIdx] : facility.viewStack;
-            
             const rawTabsArray = layoutNodeRef?.tabs || [];
             const tabsCount = Math.min(rawTabsArray.length, 16);
 
@@ -99,25 +102,10 @@ export function reduceInteractiveLayer(targetM, host, geoMap, allRegisteredKeys,
 
                 if (layoutNodeRef && layoutNodeRef.tabs_in === true) {
                     drawWindowTabsOverlay(targetM, sX, sY, sW, sH, node?.mdl, cleanTitlesList, activeIdx);
-                } else if (tabsbarGeo) {
-                    const tW = Math.floor(tabsbarGeo.w || 120);
-                    const oldTabStartX = _staticTabsbarXTracker;
-                    
-                    drawWindowTabsOverlay(targetM, oldTabStartX, -1, tW, 3, node?.mdl, cleanTitlesList, activeIdx);
-
-                    let totalWidthOccupied = 0;
-                    for (let t = 0; t < tabsCount; t++) {
-                        totalWidthOccupied += cleanTitlesList[t].length + 3; 
-                    }
-                    _staticTabsbarXTracker += totalWidthOccupied + 3;
+                } else if (slotId === "200") {
+                    drawWindowTabsOverlay(targetM, sX, -1, sW, sH, node?.mdl, cleanTitlesList, activeIdx);
                 }
             }
         }
     }
 }
-
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/io/terminal/z_layers/z3_interactive_reducer.js
- * Время изменения: 10.09.2026 16:14:15 MSK
- */

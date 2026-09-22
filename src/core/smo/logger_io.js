@@ -10,13 +10,13 @@ import fs from "node:fs";
 import path from "node:path";
 
 const RESOLVED_LOGS_DIR = path.resolve(process.cwd(), "./logs");
-
 // ИСПРАВЛЕНИЕ: Гарантируем физическое наличие директории до открытия дескриптора
 if (!fs.existsSync(RESOLVED_LOGS_DIR)) {
     fs.mkdirSync(RESOLVED_LOGS_DIR, { recursive: true });
 }
 
 const FD_CORE = fs.openSync(path.resolve(RESOLVED_LOGS_DIR, "smo_core.log"), "a");
+//console.log("RESOLVED_LOGS_DIR=",RESOLVED_LOGS_DIR);process.exit(1);
 
 const _staticLogByteBuffer = new Uint8Array(65536);
 const _staticLogEncoderBuffer = Buffer.alloc(65536);

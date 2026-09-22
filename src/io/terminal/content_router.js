@@ -1,15 +1,10 @@
 /**
  * @file src/io/terminal/content_router.js
- * @version 5.2.1-RELEASE-SMO-ROUTER-PATH-CORRECTED
- * @description Безмусорный асинхронный роутер, завязанный на глобальный ОЗУ-реестр ядра.
- * ИСПРАВЛЕН ИМПОРТ: Скорректирован относительный путь до slot_maker.js (из src/io/terminal/ в src/core/).
- * Выполнен в строгой парадигме PAC / DOD / 0% OOP / Zero Allocation.
+ * @version 6.0.1-RELEASE-SMO-ROUTER-VTABLE-FIXED
+ * @description Безмусорный асинхронный роутер. Исправлено раздельное кэширование VTABLE контроллера и вьюхи.
  */
-
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
-
-// ИСПРАВЛЕНИЕ: Точный относительный путь к каноническому расположению slot_maker.js
 import { _globalDynamicImportsCache } from "../../core/slot_maker.js";
 
 const _MODULES_BASE_DIR = resolve(process.cwd(), "./src/modules");
@@ -18,21 +13,31 @@ export async function routeModuleContentRender(compType, view, mdl, activeIdx, s
     if (!compType || !view) return false;
 
     const key = String(compType).trim();
-    
-    // Прямое чтение из общей памяти
-    let renderFn = _globalDynamicImportsCache[key];
+    let loadedModule = _globalDynamicImportsCache[key];
 
-    // Ленивый асинхронный накат в выделенную ячейку (теперь без TypeError)
-    if (renderFn === undefined) {
+    if (loadedModule === undefined) {
         try {
             const absoluteViewPath = resolve(_MODULES_BASE_DIR, key, key + "_view.js");
-            const fileUrlStr = pathToFileURL(absoluteViewPath).href;
+            const viewUrlStr = pathToFileURL(absoluteViewPath).href;
+            const importedView = await import(viewUrlStr);
 
-            const importedModule = await import(fileUrlStr);
+            // ИСПРАВЛЕНО: Вытягиваем и подмешиваем процесс интентов из файла контроллера (_ctl.js)
+            const absoluteCtlPath = resolve(_MODULES_BASE_DIR, key, key + "_ctl.js");
+            const ctlUrlStr = pathToFileURL(absoluteCtlPath).href;
+            const importedCtl = await import(ctlUrlStr);
             
-            if (importedModule && typeof importedModule.renderContent === "function") {
-                _globalDynamicImportsCache[key] = importedModule.renderContent;
-                renderFn = importedModule.renderContent;
+            if (importedView && typeof importedView.renderContent === "function") {
+                // Конструируем мономорфный vtable-объект в ОЗУ кэша
+                const unifiedModulePack = {
+                    renderContent: importedView.renderContent,
+                    processIntent: (importedCtl && typeof importedCtl.processIntent === "function") 
+                        ? importedCtl.processIntent 
+                        : (() => false) // Безопасная no-op заглушка
+                };
+                Object.preventExtensions(unifiedModulePack);
+
+                _globalDynamicImportsCache[key] = unifiedModulePack;
+                loadedModule = unifiedModulePack;
             } else {
                 _globalDynamicImportsCache[key] = null; 
                 return false;
@@ -43,11 +48,11 @@ export async function routeModuleContentRender(compType, view, mdl, activeIdx, s
         }
     }
 
-    if (renderFn === null) return false;
+    if (loadedModule === null) return false;
 
     const matrix = view.localBuffer ? view.localBuffer.matrix : view.matrix;
     if (!matrix) return false;
 
-    renderFn(matrix, view.width || 40, view.height || 5, mdl, activeIdx, slotId, viewStack);
+    loadedModule.renderContent(matrix, view.width || 40, view.height || 5, mdl, activeIdx, slotId, viewStack);
     return true;
 }

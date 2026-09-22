@@ -1,137 +1,67 @@
-
 /**
  * @file src/modules/theme/theme_ctl.js
- * @version 4.4.1-RELEASE-SMO-THEME-CTL-SCROLL-CONVERGED-FIXED
- * @description Контроллер и фазовый фильтр СМО-прибора обслуживания Канала 106 (Theme Selector).
- * ИСПРАВЛЕНО КОЛЕСИКО: Удален ошибочный гвард targetSlotId из контура нотификаций VScrollbar.
+ * @version 5.2.0-RELEASE-SMO-THEME-CTL-COMPACT-CLEAN
+ * @description Системный PAC-контроллер обслуживания Палитры Тем (Канал 106).
+ * ИСПРАВЛЕНО: Полная декомпозиция и тотальная зачистка неспецифических Ui-интентов.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / Zero Allocation.
  */
 
-import { generateGpssTransaction, _gpssEngineState } from "../../core/smo/bus.js";
+import { _gpssEngineState } from "../../core/smo/bus.js";
+import { loadAppSettings } from "../../core/app_config.js";
+import { processGenericUiKinematics } from "../../core/smo/window_manager.js";
+import { reduceCollectionInject } from "./intents/collection_inject.js";
 
-export function createThemeController(appHostRef, slotIdStr) {
-    const id = String(slotIdStr || "106");
-    const ctlState = { mdl: null, view: null, host: appHostRef, slotId: id };
-    Object.preventExtensions(ctlState);
-    return ctlState;
+/**
+ * Главная мономорфная точка входа Control-слота Палитры Тем
+ */
+export function processIntent(triad, intentStr, contextPayload) {
+    if (!triad || !intentStr) return false;
+
+    const intent = String(intentStr || "");
+
+    // =================================================================
+    // 1. СПЕЦИФИЧЕСКИЙ ДОМЕННЫЙ ИНТЕНТ (СМО-CLOCK ХОЛОДНЫЙ НАЛИВ)
+    // =================================================================
+    if (intent === "LOAD_SEQUENCE_COMPLETED") {
+        const config = loadAppSettings();
+        
+        const defaultThemes = [
+            { id: "classic",    name: "Classic Grey", borderColorMsk: "gray",      passiveColorMsk: "darkgray" },
+            { id: "matrix",     name: "Matrix Green", borderColorMsk: "green",     passiveColorMsk: "black" },
+            { id: "cyberpunk",  name: "Cyber Neon",   borderColorMsk: "magenta",   passiveColorMsk: "blue" },
+            { id: "dracula",    name: "Dracula Vamp", borderColorMsk: "purple",    passiveColorMsk: "darkgray" },
+            { id: "nordic",     name: "Nordic Frost", borderColorMsk: "cyan",      passiveColorMsk: "darkgray" }
+        ];
+
+        const appThemesPayload = (config && Array.isArray(config.themesList)) ? config.themesList : defaultThemes;
+        return reduceCollectionInject(triad, appThemesPayload);
+    }
+
+    // =================================================================
+    // 2. ДЕЛЕГИРОВАНИЕ КИНЕМАТИКИ (СТРЕЛКИ, КОЛЕСО, КЛИКИ) В WINDOW_MANAGER
+    // =================================================================
+    const facility = _gpssEngineState.facilitiesRegistry.get("106");
+    return processGenericUiKinematics(facility, intent, contextPayload);
 }
 
+/**
+ * Адаптер обратной совместимости для старого загрузчика рантайма
+ */
 export function processSpecificThemeLogic(facilityState, intentStr, contextPayload, currentTx) {
+    if (!facilityState) return false;
+
     const pack = facilityState.viewStack;
-    if (!pack) return false;
+    if (!Array.isArray(pack)) return false;
 
-    const node = Array.isArray(pack) ? pack[0] : pack;
-    if (!node || !node.mdl || !node.view) return false;
+    const activeIdx = Math.max(0, Math.floor(facilityState.activeStackIdx || 0));
+    const triad = pack[activeIdx];
+    if (!triad) return false;
 
-    const m = node.mdl;
-    const v = node.view;
-    
-    const intent = String(intentStr || "");
-    let isMutated = false;
-
-    const list = m.themesList || [];
-    const totalThemesNum = list.length;
-    const maxVisibleRows = Math.max(1, Math.floor((v.height || 16) - 5));
-
-    const vScrollMdl = _gpssEngineState.facilitiesRegistry.get("14")?.mdl;
-    const currentOffset = vScrollMdl ? Math.max(0, Math.floor(vScrollMdl.viewportOffsetRegistry[106] || 0)) : 0;
-
-    switch (intent) {
-        // =================================================================
-        // ПРЕЦИЗИОННОЕ ИСПРАВЛЕНИЕ: ПРИЕМ СДВИГА КОЛЕСИКА ОТ КАНАЛА 14
-        // =================================================================
-        case "NOTIFY_SCROLL_MUTATED":
-            if (contextPayload) {
-                // Атомарно забираем сдвинутый индекс
-                m.selectedIndex = Math.max(0, Math.min(totalThemesNum - 1, Math.floor(contextPayload.selectedIndex || 0)));
-                m._isDirty = true;
-
-                // Сразу же выстреливаем команду смены масок рамы для реактивности TUI
-                const targetThemeObj = list[m.selectedIndex];
-                if (targetThemeObj) {
-                    generateGpssTransaction("0", "GLOBAL_THEME_CHANGED", { 
-                        colorMask: String(targetThemeObj.borderColorMsk || "gray"),
-                        passiveMask: String(targetThemeObj.passiveColorMsk || "darkgray")
-                    }, "106");
-                }
-                isMutated = true;
-            }
-            break;
-
-        case "MOUSE_CLICK":
-            if (contextPayload && contextPayload.localY !== undefined) {
-                const clickY = Math.floor(contextPayload.localY);
-                
-                if (clickY >= 3 && totalThemesNum > 0) {
-                    const clickOffset = clickY - 3;
-                    const targetThemeIdx = currentOffset + clickOffset;
-                    
-                    if (targetThemeIdx >= 0 && targetThemeIdx < totalThemesNum) {
-                        m.selectedIndex = targetThemeIdx;
-                        m._isDirty = true;
-
-                        const targetThemeObj = list[targetThemeIdx];
-                        if (targetThemeObj) {
-                            generateGpssTransaction("0", "GLOBAL_THEME_CHANGED", { 
-                                colorMask: String(targetThemeObj.borderColorMsk || "gray"),
-                                passiveMask: String(targetThemeObj.passiveColorMsk || "darkgray")
-                            }, "106");
-                        }
-                        
-                        generateGpssTransaction("14", "SYNC_SCROLLBAR_METRICS", {
-                            targetSlotId: "106", totalItems: totalThemesNum, maxVisibleRows: maxVisibleRows
-                        }, "106");
-
-                        isMutated = true;
-                    }
-                }
-            }
-            break;
-
-        case "SCROLL_CONTENT_DOWN":
-        case "MOVE_CURSOR_DOWN":
-            if (totalThemesNum > 0) {
-                m.selectedIndex = (Math.max(0, Math.floor(m.selectedIndex || 0)) + 1) % totalThemesNum;
-                m._isDirty = true;
-                isMutated = true;
-            }
-            break;
-
-        case "SCROLL_CONTENT_UP":
-        case "MOVE_CURSOR_UP":
-            if (totalThemesNum > 0) {
-                m.selectedIndex = (Math.max(0, Math.floor(m.selectedIndex || 0)) - 1 + totalThemesNum) % totalThemesNum;
-                m._isDirty = true;
-                isMutated = true;
-            }
-            break;
-            
-        case "UPDATE_THEME_MASK":
-            m._isDirty = true;
-            isMutated = true;
-            break;
-    }
-
-    if (isMutated) {
-        if (intent === "MOVE_CURSOR_DOWN" || intent === "MOVE_CURSOR_UP") {
-            const targetThemeObj = list[m.selectedIndex];
-            if (targetThemeObj) {
-                generateGpssTransaction("0", "GLOBAL_THEME_CHANGED", { 
-                    colorMask: String(targetThemeObj.borderColorMsk || "gray"),
-                    passiveMask: String(targetThemeObj.passiveColorMsk || "darkgray")
-                }, "106");
-            }
-        }
-        if (facilityState.host?.virtualCanvasState) {
-            facilityState.host.virtualCanvasState.isDirty = true;
-        }
-    }
-    
-    return isMutated;
+    return processIntent(triad, intentStr, contextPayload);
 }
 
 /** 
  * ПАСПОРТ ЛИСТИНГА:
  * Путь: src/modules/theme/theme_ctl.js
- * Время изменения: 06.09.2026 18:03:12 MSK
+ * Время изменения: 19.09.2026 01:06:12 MSK
  */

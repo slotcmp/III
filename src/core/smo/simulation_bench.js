@@ -1,145 +1,117 @@
 /**
  * @file src/core/smo/simulation_bench.js
- * @path src/core/smo/simulation_bench.js
- * @version 1.0.1-RELEASE-SMO-SIMULATION-BENCH-FIXED
- * @description Стенд аппаратной имитации тактов и виртуальных приборов SLOTCMP III.
- * ИСПРАВЛЕНЫ КОЛЛИЗИИ И GC: Каналы перенесены в изолированную зону 19x, моки преаллоцированы (0% GC).
- * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp / 0% GC.
+ * @version 2.0.5-DEBUG-IDD-DEEP-DUMP
+ * @description Стенд глубокого DOD-аудита адресного пространства PAC-триад Слота 104.
+ * Выполнен в строгой парадигме PAC / DOD / 0% OOP / Zero Allocation / 0% GC.
  */
 
-import { registerGpssFacility, generateGpssTransaction } from "./bus.js";
-import { writeCoreLogMessageInline } from "./logger_io.js";
+import { _gpssEngineState } from "./bus.js";
+import { processSystemVScrollbarLogic } from "../../system/vscrollbar/vscrollbar_ctl.js";
+import { processSpecificFnbarLogic } from "../../modules/fnbar/fnbar_ctl.js";
+import { renderContent } from "../../modules/fnbar/fnbar_view.js";
 
-// Плоский ОЗУ-регистр метрик стенда симуляции
-const _benchRegistry = {
-    totalSimulatedTicks: 0,
-    capturedPacketsCount: 0,
-    lastCapturedItemsLength: -1,
-    hiddenClassStatusMsk: "MONOMORPHIC"
-};
-Object.preventExtensions(_benchRegistry);
+function forceHydrateTestEnvironmentV5() {
+    const registry = _gpssEngineState.facilitiesRegistry;
 
-// ПРЕЦИЗИОННАЯ ПРЕАЛЛОКАЦИЯ МОКОВ ДЛЯ ПОЛНОГО ИСКЛЮЧЕНИЯ АЛЛОКАЦИЙ НА ТАКТАХ (0% GC)
-const _MOCK_ITEMS_BUFFER = [
-    { name: "..", isDir: true, size: 0, ext: "" },
-    { name: "SIMULATED_FILE_A.DOD", isDir: false, size: 1024, ext: ".dod" },
-    { name: "SIMULATED_DIR_B", isDir: true, size: 0, ext: "" }
-];
-Object.preventExtensions(_MOCK_ITEMS_BUFFER[0]);
-Object.preventExtensions(_MOCK_ITEMS_BUFFER[1]);
-Object.preventExtensions(_MOCK_ITEMS_BUFFER[2]);
-Object.preventExtensions(_MOCK_ITEMS_BUFFER);
+    // Имитируем реальное поведение ядра: разворачиваем РАЗДЕЛЬНЫЕ модели во viewStack,
+    // чтобы проверить, куда именно уходит запись при смещении индексов Window Manager
+    if (!registry.has("104")) {
+        const createModelLayer = () => {
+            const m = {
+                activeModifierIdx: 0,
+                _activeSubZone: 0,
+                _isDirty: false,
+                menuMatrix: [
+                    ["F1_Help", "F2_Menu", "F3_View", "F4_Edit", "F5_Copy", "F6_RenM", "F7_MkD", "F8_Del", "F9_Conf", "F10_Exit"],
+                    ["C1_Left", "C2_Righ", "C3_Ver ", "C4_Edit", "C5_Prin", "C6_Link", "C7_Find", "C8_Hist", "C9_Vide", "C10_Tree"],
+                    ["S1_Help", "S2_User", "S3_Cmd ", "S4_Arch", "S5_Copy", "S6_RenM", "S7_MkD", "S8_Del", "S9_Save", "S10_Last"],
+                    ["A1_Left", "A2_Righ", "A3_View", "A4_Hex ", "A5_Pack", "A6_Unpa", "A7_Find", "A8_Hist", "A9_Vide", "A10_Tree"]
+                ]
+            };
+            Object.preventExtensions(m);
+            return m;
+        };
 
-const _STATIC_MOCK_PAYLOAD = {
-    currentPath: "C:/VIRTUAL_SIMULATION_ROOT",
-    targetStackIdx: 0,
-    items: _MOCK_ITEMS_BUFFER
-};
-Object.preventExtensions(_STATIC_MOCK_PAYLOAD);
+        const mockFnbar = {
+            id: "104",
+            componentType: "fnbar",
+            activeStackIdx: 0,
+            viewStack: [
+                { mdl: createModelLayer(), view: { height: 1 } },
+                { mdl: createModelLayer(), view: { height: 1 } },
+                { mdl: createModelLayer(), view: { height: 1 } },
+                { mdl: createModelLayer(), view: { height: 1 } }
+            ]
+        };
+        registry.set("104", mockFnbar);
+    }
 
-/**
- * Инициализирует и монтирует виртуальные приборы на шину СМО
- */
-export function initializeSimulationBench(kernelRef) {
-    writeCoreLogMessageInline("\n=================================================================\n");
-    writeCoreLogMessageInline("[SMO_BENCH] ЗАПУСК СТЕНДА АППАРАТНОЙ ИМИТАЦИИ ИНТЕНТОВ И ТАКТОВ...\n");
-    writeCoreLogMessageInline("=================================================================\n");
+    if (!registry.has("200")) {
+        registry.set("200", { id: "200", componentType: "tabsbar", activeStackIdx: 0, viewStack: [] });
+    }
 
-    // 1. СБОРКА ВИРТУАЛЬНОГО ПРИБОРА КАНАЛА 198 (ИСТОЧНИК VFS)
-    const virtualVfsSource = {
-        host: kernelRef,
-        slotId: "198",
-        componentType: "virtual_vfs_source",
-        displayIndex: 198,
-        localQueue: [],
-        _head: 0,
-        
-        dispatch: (actionStr, gpssTx) => {
-            if (!gpssTx) return false;
-            virtualVfsSource.localQueue.push(gpssTx);
-            return true;
-        },
-        
-        advanceFacility: () => {
-            while (virtualVfsSource._head < virtualVfsSource.localQueue.length) {
-                const tx = virtualVfsSource.localQueue[virtualVfsSource._head++];
-                if (tx) _benchRegistry.totalSimulatedTicks++;
+    if (!registry.has("14")) {
+        registry.set("14", {
+            id: "14",
+            mdl: {
+                viewportOffsetRegistry: new Int16Array(256),
+                selectedIndexRegistry:  new Int16Array(256),
+                totalItemsRegistry:     new Int16Array(256),
+                maxVisibleRowsRegistry: new Uint8Array(256)
             }
-            return false;
-        }
-    };
-    Object.preventExtensions(virtualVfsSource);
-    registerGpssFacility("198", virtualVfsSource);
+        });
+    }
+}
 
-    // 2. СБОРКА ВИРТУАЛЬНОГО ПРИБОРА КАНАЛА 192 (СТОК ПРОВОДНИКА ИЗОЛИРОВАННЫЙ)
-    const virtualExplorerSink = {
-        host: kernelRef,
-        slotId: "192",
-        componentType: "virtual_explorer_sink",
-        displayIndex: 192,
-        localQueue: [],
-        _head: 0,
-        
-        dispatch: (actionStr, gpssTx) => {
-            if (!gpssTx) return false;
-            virtualExplorerSink.localQueue.push(gpssTx);
-            return true;
-        },
-        
-        advanceFacility: () => {
-            let isMutated = false;
-            while (virtualExplorerSink._head < virtualExplorerSink.localQueue.length) {
-                const tx = virtualExplorerSink.localQueue[virtualExplorerSink._head++];
-                if (!tx) continue;
-                
-                _benchRegistry.capturedPacketsCount++;
-                const intent = String(tx.P2 || "");
-                
-                if (intent === "INJECT_VFS_DATA") {
-                    const ctx = tx.P3;
-                    if (ctx) {
-                        const itemsArr = ctx.items;
-                        _benchRegistry.lastCapturedItemsLength = Array.isArray(itemsArr) ? itemsArr.length : -2;
-                        
-                        writeCoreLogMessageInline("[SMO_BENCH_AUDIT] СТОК 192 принял транзакт #" + tx.id + " | Интент: " + intent + "\n");
-                        writeCoreLogMessageInline("[SMO_BENCH_AUDIT] Результат замера ДНК данных: длина массива файлов = " + _benchRegistry.lastCapturedItemsLength + "\n");
-                        
-                        if (_benchRegistry.lastCapturedItemsLength === -2) {
-                            _benchRegistry.hiddenClassStatusMsk = "DEOPTIMIZED_SLICED";
-                            writeCoreLogMessageInline("[SMO_BENCH_ALERT] !!! ФАТАЛЬНЫЙ СРЕЗ ДАННЫХ ДЕТЕКТИРОВАН В ОЧЕРЕДИ ПРИБОРА !!!\n");
-                        } else {
-                            writeCoreLogMessageInline("[SMO_BENCH_SUCCESS] Структура данных доставлена в ОЗУ прибора без потерь.\n");
-                        }
-                    }
-                    isMutated = true;
-                }
-            }
-            return isMutated;
-        }
-    };
-    Object.preventExtensions(virtualExplorerSink);
+export function runIddScrollDiagnosticBench() {
+    console.log("\n====================================================");
+    console.log("[IDD_TEST_BENCH] ЗАПУСК СТЕНДА ГЛУБОКОГО АУДИТА ОЗУ V5...");
+    console.log("====================================================");
+
+    forceHydrateTestEnvironmentV5();
+
+    const fnbar = _gpssEngineState.facilitiesRegistry.get("104");
+    const vscrollbar = _gpssEngineState.facilitiesRegistry.get("14");
+
+    console.log("ГЛУБИНА СТЭКА TRIADS В СЛОТЕ 104:", fnbar.viewStack.length, "элементов.");
+    console.log("СТАРТОВЫЙ ИНДЕКС WM (activeStackIdx):", fnbar.activeStackIdx);
+    console.log("СТАРТОВЫЙ РЕГИСТР _activeSubZone ТРИАДЫ [0]:", fnbar.viewStack[0].mdl._activeSubZone);
+
+    // =================================================================
+    // СИМУЛЯЦИЯ ИМПУЛЬСА: КРУТИМ КОЛЕСИКО ВНИЗ СТРОГО 1 РАЗ
+    // =================================================================
+    console.log("\n>>> СИМУЛЯЦИЯ: Вращение колесика мыши (WHEEL_DOWN) над ушками 200 >>>");
     
-    // Исправлено: Регистрируем приборы в безопасных, не конфликтующих с WM-интерфейсом каналах
-    registerGpssFacility("192", virtualExplorerSink);
+    const mockPayload = { targetSlotId: "200" };
+    Object.preventExtensions(mockPayload);
 
-    writeCoreLogMessageInline("[SMO_BENCH] Виртуальные приборы 198 and 192 успешно смонтированы на шину.\n\n");
-}
+    // Шаг 1: Отрабатывает Канал 14 (vscrollbar_ctl), смещая активный индекс фасилити в 1
+    processSystemVScrollbarLogic(vscrollbar, "SCROLL_TABS_DOWN", mockPayload, null);
+    
+    console.log("\n[ПОСЛЕ СКРОЛЛА] Состояние регистров Window Manager:");
+    console.log("   -> Текущий активный индекс СМО фасилити 104:", fnbar.activeStackIdx);
 
-/**
- * Симулирует реактивный аппаратный импульс (Такт А: Мгновенный проброс)
- */
-export function runInstantSimulationStep() {
-    writeCoreLogMessageInline("[SMO_BENCH] Эксперимент А: Мгновенный синхронный вброс транзакта...\n");
-    generateGpssTransaction("192", "INJECT_VFS_DATA", _STATIC_MOCK_PAYLOAD, "198");
-}
+    // Шаг 2: Шина вызывает процесс обработки интента для Слота 104
+    const nextModIdx = fnbar.activeStackIdx;
+    processSpecificFnbarLogic(fnbar, "KEYBOARD_MODIFIER_CHANGED", { modifierIdx: nextModIdx }, null);
 
-/**
- * Симулирует отложенный аппаратный импульс через микрозадачи (Такт Б: Асинхронный сдвиг)
- */
-export function runDeferredSimulationStep() {
-    writeCoreLogMessageInline("\n[SMO_BENCH] Эксперимент Б: Отложенный асинхронный вброс через process.nextTick...\n");
-    process.nextTick(() => {
-        writeCoreLogMessageInline("[SMO_BENCH] Срабатывание nextTick. Энергия импульса высвобождена.\n");
-        generateGpssTransaction("192", "INJECT_VFS_DATA", _STATIC_MOCK_PAYLOAD, "198");
-    });
+    console.log("\n[ПОСЛЕ ОБРАБОТКИ ИНТЕНТА] Дамп регистров ОЗУ моделей во viewStack:");
+    for (let idx = 0; idx < fnbar.viewStack.length; idx++) {
+        console.log(`   -> Триада [${idx}]: _activeSubZone = ${fnbar.viewStack[idx].mdl._activeSubZone}, _isDirty = ${fnbar.viewStack[idx].mdl._isDirty}`);
+    }
+
+    // Шаг 3: Симулируем вызов отрисовщика ядра, как это делает реальный EXECUTE_RENDER
+    console.log("\n>>> СИМУЛЯЦИЯ ЯДРА: Вызов fnbar_view.renderContent для текущей активной триады >>>");
+    
+    // Создаем мок двумерной матрицы кадра (1 строка, 120 ячеек)
+    const mockMatrix = [new Int32Array(120)];
+    
+    // Ядро берет триаду по текущему смещенному индексу WM!
+    const activeTriadForRender = fnbar.viewStack[fnbar.activeStackIdx];
+    
+    renderContent(mockMatrix, 120, 1, activeTriadForRender.mdl, fnbar.activeStackIdx, "104", fnbar.viewStack);
+
+    console.log("\n====================================================");
+    console.log("[IDD_TEST_BENCH] ТЕСТИРОВАНИЕ ЗАВЕРШЕНО.");
+    console.log("====================================================\n");
 }

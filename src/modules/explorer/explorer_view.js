@@ -1,9 +1,9 @@
 ﻿/**
  * @file src/modules/explorer/explorer_view.js
- * @version 3.0.0-RELEASE-SMO-EXPLORER-VIEW-FILES-FIXED
+ * @version 3.2.0-RELEASE-SMO-EXPLORER-VIEW-STABLE-items-FIXED
  * @description Процедурный отрисовщик содержимого VFS-каталога для Слотов 102/103.
- * ИСПРАВЛЕНО ОТОБРАЖЕНИЕ ФАЙЛОВ: Добавлен безаллокационный итератор отрисовки entries/files.
- * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
+ * ИСПРАВЛЕНО: Поле итерации синхронизировано с IPC-пакетом воркера (mdl.items).
+ * Выполнен в строгой парадигме PAC / DOD / 0% OOP / Zero Allocation.
  */
 
 import { prepareGenericTuiLayout } from "../../io/terminal/generic_tui_layout.js";
@@ -19,24 +19,24 @@ export function renderContent(matrix, currentW, currentH, mdl, activeTabIdx, slo
     const w = Math.floor(currentW || 40);
     const h = Math.floor(currentH || 15);
 
-    // 1. Извлекаем кэшированные вкладки путей
-    const titles = mdl._globalTabsNamesCached || ["SYS", "SRC"];
+    // 1. Извлекаем названия вкладок (SYS | SRC | MOD | LOG)
+    const titles = mdl._globalTabsNamesCached || ["SYS", "SRC", "MOD", "LOG"];
 
-    // 2. Подготовка TUI-шаблона и плашек табов
+    // 2. Подготовка стандартной TUI-подложки и плашек табов на строке Y = 1
     prepareGenericTuiLayout(matrix, w, h, mdl, titles, activeTabIdx, true, slotIdStr, true);
 
-    // 3. Рисуем внутреннюю сетку рамок
+    // 3. Накатываем фоновую сетку знакомест с защитой желоба скроллбара
     drawFrameGrid(matrix, w, h, true);
 
     // =================================================================
-    // ИСПРАВЛЕНИЕ: БЕЗАЛЛОКАЦИОННЫЙ ВЫВОД ЭЛЕМЕНТОВ ФАЙЛОВОЙ СИСТЕМЫ (0% GC)
+    // СИНХРОНИЗИРOВАНО: ВЫВОД ИЗ mdl.items ПОД ТАКТЫ VFS_WORKER (0% GC)
     // =================================================================
-    const entries = mdl.itemsList || [];
-    const totalEntries = Math.floor(entries.length | 0);
+    const entries = mdl.items || mdl.itemsList || [];
+    const totalEntries = entries.length;
     const selectedIdx = Math.floor(mdl.selectedIndex || 0);
     const scrollOffset = Math.floor(mdl.viewportOffset || 0);
 
-    const maxVisibleRows = Math.max(1, h - 4);
+    const maxVisibleRows = Math.max(1, h - 4); // Контент строго между Y=3 и Y=h-2
     const printCount = Math.min(totalEntries - scrollOffset, maxVisibleRows);
 
     const bgNormal = "\x1b[40m";
@@ -45,32 +45,27 @@ export function renderContent(matrix, currentW, currentH, mdl, activeTabIdx, slo
         const absoluteEntryIdx = (scrollOffset + i) | 0;
         const rowLineIdx = (3 + i) | 0;
         const row = matrix[rowLineIdx];
-        const entryObj = entries[absoluteEntryIdx];
+        const fileItem = entries[absoluteEntryIdx];
 
-        if (row && entryObj) {
-            const nameStr = String(entryObj.name || "unnamed");
+        if (row && fileItem) {
             const isSel = (absoluteEntryIdx === selectedIdx);
             
-            // Расчет ANSI-палитры под спецификацию explorer_item_renderer.js
-            const fgStr = isSel ? "\x1b[38;5;16m" : (entryObj.isDir ? "\x1b[38;5;45m" : "\x1b[38;5;231m");
+            // Золотая плашка \x1b[48;5;220m при фокусе, синий для папок, белый для файлов
+            const fgStr = isSel ? "\x1b[38;5;16m" : (fileItem.isDir ? "\x1b[38;5;45m" : "\x1b[38;5;231m");
             const bgStr = isSel ? "\x1b[48;5;220m" : bgNormal;
 
-            // Индикатор директории [DIR] или файла [FIL] по каноничным префиксам
-            const prefixStr = entryObj.isDir ? "DIR " : "FIL ";
-            const fullLineStr = prefixStr + nameStr;
-            const printLen = Math.min(fullLineStr.length, w - 4);
+            const prefixStr = fileItem.isDir ? "DIR " : "FIL ";
+            const cleanNameStr = String(fileItem.name || "");
+            const finalLineTextStr = prefixStr + cleanNameStr;
+
+            // Защитный барьер от вылета за правую границу рамки окна
+            const printLen = Math.min(finalLineTextStr.length, w - 4);
 
             for (let x = 0; x < printLen; x++) {
                 if (2 + x < w - 1) {
-                    row[2 + x] = packCellBits(fullLineStr.charAt(x), fgStr, bgStr);
+                    row[2 + x] = packCellBits(finalLineTextStr.charAt(x), fgStr, bgStr);
                 }
             }
         }
     }
 }
-
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/modules/explorer/explorer_view.js
- * Время исправления: 09.09.2026 13:55:00 MSK
- */

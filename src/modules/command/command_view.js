@@ -1,8 +1,8 @@
 /**
  * @file src/modules/command/command_view.js
- * @version 3.0.1-RELEASE-SMO-COMMAND-VIEW-STRICT-INDEX
+ * @version 3.0.2-RELEASE-SMO-COMMAND-VIEW-STRICT-DOD-FIXED
  * @description Процедурный отрисовщик TUI-строки ввода команд Слота 105.
- * ИСПРАВЛЕН КРАШ ИНДЕКСАЦИИ: Извлечена единственная строка matrix из двумерного буфера кадра.
+ * ИСПРАВЛЕНО: Адресация текста, каретки и фокуса полностью синхронизирована с mdl.buffer и mdl.cursor.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp / Zero Allocation.
  */
 
@@ -16,7 +16,7 @@ export function renderContent(matrix, currentW, currentH, mdl, activeTabIdx, slo
 
     const w = Math.floor(currentW || 120);
     
-    // ИСПРАВЛЕНИЕ: Извлекаем строго первую контентную строку (индекс 0) из двумерного массива локальной матрицы
+    // Извлекаем строго первую контентную строку (индекс 0) из двумерного массива локальной матрицы
     const row = matrix[0];
     if (!row) return;
 
@@ -30,14 +30,17 @@ export function renderContent(matrix, currentW, currentH, mdl, activeTabIdx, slo
     if (currentX < w) { row[currentX] = packCellBits(">", fgPrompt, bgColor); currentX++; }
     if (currentX < w) { row[currentX] = packCellBits(" ", fgPrompt, bgColor); currentX++; }
 
-    // 2. ВЫВОД ТЕКСТА ИЗ ЖИВOГО БУФЕРА ВВОДА МОДЕЛИ CLI
-    const rawInputBufferStr = String(mdl.inputBuffer || mdl.commandString || "");
+    // 2. ВЫВОД ТЕКСТА ИЗ СИНХРОНИЗИРOВАННOГO БУФЕРА ВВОДА МОДЕЛИ CLI
+    const rawInputBufferStr = String(mdl.buffer || "");
     const bufferLen = rawInputBufferStr.length;
-    const cursorPosition = Math.floor(mdl.cursorX || 0);
+    
+    // Считываем позицию каретки и флаг фокуса строго из мономорфных регистров модели
+    const cursorPosition = Math.max(0, Math.floor(mdl.cursor || 0));
+    const isFocusedBool = mdl.isFocused === true || mdl._isFocused === true;
 
     for (let i = 0; i < bufferLen; i++) {
         if (currentX < w) {
-            const isCursorZone = (i === cursorPosition && mdl.isFocused !== false);
+            const isCursorZone = (i === cursorPosition && isFocusedBool === true);
             const bg = isCursorZone ? "\x1b[48;5;231m" : bgColor;
             const fg = isCursorZone ? "\x1b[38;5;16m" : fgText;
 
@@ -47,7 +50,7 @@ export function renderContent(matrix, currentW, currentH, mdl, activeTabIdx, slo
     }
 
     // 3. ОТРИСОВКА ПУСТОГО КУРСOРА В КОНЦЕ СТРОКИ
-    if (cursorPosition >= bufferLen && currentX < w && mdl.isFocused !== false) {
+    if (cursorPosition >= bufferLen && currentX < w && isFocusedBool === true) {
         row[currentX] = packCellBits(" ", "\x1b[38;5;16m", "\x1b[48;5;231m");
         currentX++;
     }
@@ -63,5 +66,5 @@ export function renderContent(matrix, currentW, currentH, mdl, activeTabIdx, slo
 /** 
  * ПАСПОРТ ЛИСТИНГА:
  * Путь: src/modules/command/command_view.js
- * Время изменения: 10.09.2026 15:53:10 MSK
+ * Время изменения: 19.09.2026 02:54:10 MSK
  */

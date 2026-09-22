@@ -1,30 +1,36 @@
 /**
  * @file src/core/app_host_canvas.js
- * @version 1.0.0-RELEASE-SMO-HOST-CANVAS-PREALLOCATOR
- * @description Стерильный выделитель памяти под UHD-матрицу знакомест без GC-мусора.
- * Выполнен в строгой парадигме PAC / DOD / 0% OOP / Fast Properties.
+ * @version 2.0.0-RELEASE-SMO-HOST-CANVAS-INT32ARRAY
+ * @description Чистая DOD-преаллокация UHD-матрицы кадра на базе примитивов Int32Array.
+ * Выполнен в строгой парадигме PAC / DOD / 0% OOP / Fast Properties / Zero Allocation.
  */
 
+import { packCellBits } from "../io/terminal/sprite_blit.js";
+
 /**
- * Выделяет и запечатывает строки двумерного массива виртуального ConPTY-кадра
- * @returns {Array} Плоский массив фиксированных запечатанных строк объектов знакомест
+ * Выделяет и запечатывает строки двумерного массива виртуального ConPTY-кадра в числах
+ * @returns {Int32Array[]} Массив фиксированных запечатанных строк объектов знакомест
  */
 export function preallocateVirtualDisplayMatrix() {
     const matrixRowsCount = 64;
     const matrixColsCount = 512;
     const m = new Array(matrixRowsCount);
     
+    // Прекомпилируем битовую маску дефолтного пробела на черном фоне
+    const defaultSpacePackedBits = packCellBits(" ", "\x1b[37m", "\x1b[40m");
+
     for (let y = 0; y < matrixRowsCount; y++) {
-        m[y] = new Array(matrixColsCount);
+        m[y] = new Int32Array(matrixColsCount);
         const row = m[y];
         
+        // Быстрый налив чисел в ОЗУ
         for (let x = 0; x < matrixColsCount; x++) {
-            // Структура ячейки UHD-холста открыта для сверхбыстрой перезаписи примитивов (.char, .fg, .bg)
-            row[x] = { char: " ", fg: "\x1b[37m", bg: "\x1b[40m" };
+            row[x] = defaultSpacePackedBits;
         }
-        // Запечатываем только форму строки (набор колонок фиксирован в 512 для JIT Fast Properties)
+        
         Object.preventExtensions(row);
     }
     
+    Object.preventExtensions(m);
     return m;
 }

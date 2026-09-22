@@ -1,17 +1,15 @@
 /**
  * @file src/modules/command/command_ctl.js
- * @version 5.4.0-RELEASE-SMO-COMMAND-CTL-CLEAN-FINAL
+ * @version 5.5.2-RELEASE-SMO-COMMAND-CTL-STRICT-ROOT-EXTRACTOR
  * @description Стерильный роутер и фазовый фильтр СМО-прибора Канала 105 (Control-контур).
- * ИСПРАВЛЕНА СТРУКТУРА: Весь парсинг удален, контроллер возвращен к парадигме чистой O(1) диспетчеризации.
+ * ИСПРАВЛЕНО: Экстрактор переведен на жесткий DOD-приоритет извлечения mdl/view напрямую из корня фасилити.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / Zero Allocation.
  */
 
-import { generateGpssTransaction } from "../../core/smo/bus.js";
-
-// Импорт размоноличенных контуров логики
-import { reduceCliCharInput } from "./intents/cli_char_reducer.js";
-import { reduceCliTabCompletion } from "./intents/cli_tab_reducer.js";
-import { reduceCliHistoryNavigation } from "./intents/cli_history_reducer.js";
+// Импортируем изолированные шаги сборщика
+import { commandHistory } from "./command_steps/commandHistory.js";
+import { commandFocus } from "./command_steps/commandFocus.js";
+import { commandRouter } from "./command_steps/commandRouter.js";
 
 export function createCommandController(appHostRef, slotIdStr) {
     const id = String(slotIdStr || "105");
@@ -21,95 +19,46 @@ export function createCommandController(appHostRef, slotIdStr) {
 }
 
 export function processSpecificCommandLogic(facilityState, intentStr, contextPayload, currentTx) {
-    const pack = facilityState.viewStack;
-    if (!pack || !Array.isArray(pack)) return false;
+    if (!facilityState) return false;
 
-    // Мономорфное извлечение моделей по спецификации slot_maker.js
-    const node = pack[0];
-    if (!node || !node.mdl || !node.view) return false;
+    // =================================================================
+    // СИНХРОНИЗИРOВAНO: ПРЯМOЙ DOD-СБOР МOДЕЛИ И ВЬЮХИ ИЗ КOРНЯ ПAСПOРТA
+    // =================================================================
+    // Так как для плоского Слота 105 фабрика ядра кладет триаду напрямую в корень фасилити
+    let m = facilityState.mdl;
+    let v = facilityState.view;
 
-    const m = node.mdl;
-    const v = node.view;
+    // Фолбэк на случай, если в вашей ревизии структуры упакованы во viewStack
+    if (!m || !v) {
+        const pack = facilityState.viewStack;
+        if (Array.isArray(pack) && pack[0]) {
+            m = pack[0].mdl;
+            v = pack[0].view;
+        } else if (pack && !Array.isArray(pack)) {
+            m = pack.mdl;
+            v = pack.view;
+        }
+    }
+
+    // Если структуры по-прежнему не найдены — пассивно гасим такт шины СМО
+    if (!m || !v) return false;
 
     const kernel = facilityState.host;
     const intent = String(intentStr || "");
-    let isMutated = false;
 
-    // Ленивая ОЗУ-линковка персистентного буфера истории
-    if (!m.historyBuffer && kernel?.model?.logicalState?.appSettings) {
-        const settings = kernel.model.logicalState.appSettings;
-        m.historyBuffer = settings.cli_history;
-        m.historyCount = Math.floor(settings.cli_history_count || 0);
-        m.historyCursor = m.historyCount;
-    }
+    // Шаг 1: Ленивая линковка буферов истории
+    commandHistory(m, kernel);
 
-    if (kernel?.model?.logicalState) {
-        v._isFocused = (String(kernel.model.logicalState.focusedSlotId || "") === "105");
-    }
+    // Шаг 2: Синхронизация флагов фокуса в модель и вьюху
+    commandFocus(m, v, kernel);
 
     if (intent !== "TAB_COMPLETION_REQUEST" && m._tabCompletionActive === true) {
         m._tabCompletionActive = false;
         m._matchCount = 0;
     }
 
-    // =================================================================
-    // СТЕРЕЛЬНЫЙ O(1) РОУТИНГ СЕМАНТИЧЕСКИХ ИНТЕНТОВ ШИНЫ СМО
-    // =================================================================
-    if (intent === "KEY_PRESSED") {
-        const rawCharObj = contextPayload || (currentTx ? currentTx.P3 : null);
-        if (rawCharObj) {
-            const chr = String(typeof rawCharObj === "object" ? (rawCharObj.char || "") : rawCharObj);
-            isMutated = reduceCliCharInput(m, intent, chr);
-        }
-    }
-    // Принимаем чистый, изолированный интент BACKSPACE от прибора Канала 4
-    else if (intent === "BACKSPACE" || intent === "BACKSPACE_PRESSED" || intent === "DELETE_CHAR") {
-        isMutated = reduceCliCharInput(m, "BACKSPACE", null);
-    }
-    // Принимаем чистые интенты навигации от прибора Канала 4
-    else if (intent === "MOVE_CURSOR_LEFT" || intent === "MOVE_CURSOR_RIGHT") {
-        isMutated = reduceCliCharInput(m, intent, null);
-    }
-    else if (intent === "TAB_COMPLETION_REQUEST") {
-        isMutated = reduceCliTabCompletion(m, kernel);
-    }
-    else if (intent === "MOVE_CURSOR_UP" || intent === "MOVE_CURSOR_DOWN") {
-        isMutated = reduceCliHistoryNavigation(m, intent);
-    }
-    else if (intent === "EXECUTE_COMMAND") {
-        if (m.buffer && m.buffer.length > 0) {
-            const commandStr = String(m.buffer).trim();
-            
-            if (m.historyBuffer) {
-                if (m.historyCount < 32) {
-                    m.historyBuffer[m.historyCount] = commandStr;
-                    m.historyCount++;
-                } else {
-                    for (let i = 1; i < 32; i++) {
-                        m.historyBuffer[i - 1] = m.historyBuffer[i];
-                    }
-                    m.historyBuffer = commandStr; 
-                }
-                m.historyCursor = m.historyCount;
-                if (kernel?.model?.logicalState?.appSettings) {
-                    kernel.model.logicalState.appSettings.cli_history_count = m.historyCount;
-                    kernel.model.logicalState.appSettings._isHistoryDirty = true;
-                }
-            }
-
-            generateGpssTransaction("0", "SYSTEM_COMMAND_EXECUTE", { rawCommand: commandStr }, "105");
-            
-            // Безаллокационный сброс строки ввода
-            m.buffer = ""; m.cursor = 0; m.textLength = 0; m.cursorX = 0;
-            for (let k = 0; k < 256; k++) m.charBuffer[k] = " ";
-            m._isDirty = true;
-            isMutated = true;
-        }
-    }
-    else if (intent === "UPDATE_THEME_MASK") {
-        m._isDirty = true;
-        isMutated = true;
-    }
+    // Шаг 3: Проброс в изолированный вычислительный роутер интентов
+    const isMutated = commandRouter(m, intentStr, contextPayload, currentTx, kernel, facilityState);
 
     if (isMutated && kernel?.virtualCanvasState) {
         kernel.virtualCanvasState.isDirty = true;
@@ -117,9 +66,3 @@ export function processSpecificCommandLogic(facilityState, intentStr, contextPay
 
     return isMutated;
 }
-
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/modules/command/command_ctl.js
- * Время изменения: 05.09.2026 12:46:00 MSK
- */

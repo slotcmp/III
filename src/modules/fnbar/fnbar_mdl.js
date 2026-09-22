@@ -1,37 +1,43 @@
 /**
  * @file src/modules/fnbar/fnbar_mdl.js
- * @version 1.1.0-RELEASE-SMO-DOD-FNBAR-MDL-UNIFIED
- * @description Анемичная модель данных Far-панели (PAC / Abstraction).
- * ИСПРАВЛЕНО: Функция переименована в assembleModel для глобальной унификации.
- * Выполнен в строгой парадигме PAC / DOD / 0% OOP / Zero Allocation.
+ * @version 7.1.1-RELEASE-SMO-DOD-FNBAR-MODEL-STRICT-COMPLIANT
+ * @description Мономорфная анемичная модель Функциональной панели (Канал 104) на параллельных массивах.
+ * ИСПРАВЛЕНО: Матрицы переведены на 1-based индексацию клавиш (размер 11, где [0] = ""),
+ * что полностью исключает сдвиги оффсетов и восстанавливает извлечение ярлыков.
+ * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
-export function assembleModel() {
+export function createFnbarMdlInstance() {
+    // Каноническая матрица ярлыков, где индекс элемента равен номеру функциональной клавиши
+    const matrix = [
+        // 0: DEFAULT
+        ["", "Help", "Menu", "View", "Edit", "Copy", "RenMov", "MkDir", "Delete", "Conf", "Exit"],
+        // 1: CTRL
+        ["", "Left", "Right", "Ver", "Edit", "Print", "Link", "Find", "History", "Video", "Tree"],
+        // 2: SHIFT
+        ["", "Help", "User", "Cmd", "Arch", "Copy", "RenMov", "MkDir", "Delete", "Save", "Last"],
+        // 3: ALT
+        ["", "Left", "Right", "View", "Hex", "Pack", "Unpack", "Find", "History", "Video", "Tree"]
+    ];
+
+    Object.preventExtensions(matrix[0]);
+    Object.preventExtensions(matrix[1]);
+    Object.preventExtensions(matrix[2]);
+    Object.preventExtensions(matrix[3]);
+
     const mdlState = {
-        _isDirty: true,
-        _activeSubZone: 1,
+        componentType: "fnbar",
+        activeStackIdx: 0, 
         
-        // 0 - default, 1 - ctrl, 2 - shift, 3 - alt
-        activeModifierIdx: 0,
+        menuMatrix: matrix,
 
-        _modifierTitles: [
-            "Меню: F(n)",
-            "Меню Ctrl+F(n)",
-            "Меню Shift+F(n)",
-            "Меню Alt+F(n)"
-        ],
+        // Типизированный регистр грязи на 4 маски
+        isDirtyRegistry: new Uint8Array(4),
 
-        menuMatrix: [
-            ["Help", "Menu", "View", "Edit", "Copy", "RenMov", "MkDir", "Delete", "Conf", "Exit"],
-            ["Left", "Right", "Ver", "Edit", "Print", "Link", "Find", "History", "Video", "Tree"],
-            ["Help", "User", "Cmd", "Arch", "Copy", "RenMov", "MkDir", "Delete", "Save", "Last"],
-            ["Left", "Right", "View", "Hex", "Pack", "Unpack", "Find", "History", "Video", "Tree"]
-        ]
+        _isDirty: true,
+        _activeSubZone: 0
     };
 
-    // Фиксируем Hidden Class для V8 TurboFan
-    Object.preventExtensions(mdlState._modifierTitles);
-    Object.preventExtensions(mdlState.menuMatrix);
     Object.preventExtensions(mdlState);
     return mdlState;
 }
@@ -39,5 +45,5 @@ export function assembleModel() {
 /** 
  * ПАСПОРТ ЛИСТИНГА:
  * Путь: src/modules/fnbar/fnbar_mdl.js
- * Время изменения: 06.09.2026 22:12:00 MSK
+ * Время изменения: 16.09.2026 23:38:00 MSK
  */

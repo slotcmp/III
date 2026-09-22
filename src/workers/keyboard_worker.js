@@ -1,8 +1,9 @@
 /**
  * @file src/app/workers/keyboard_worker.js
- * @version 3.7.0-RELEASE-SMO-KEYBOARD-WORKER-CLEAN-FINAL
+ * @version 3.7.3-RELEASE-SMO-KEYBOARD-WORKER-FN-MODS-PRESERVED
  * @description Фоновый воркер разбора клавиатурных событий (Hardware Driver).
- * ИСПРАВЛЕНА СТРУКТУРА: Удалены временные хаки инжекции байт забоя, воркер возвращен к роли чистого транслятора.
+ * ИСПРАВЛЕНО: Флаги модификаторов ctrl/shift/meta теперь прецизионно запечатываются 
+ * в полезную нагрузку FN_KEY_CLICKED для полной ликвидации рассинхронизации ОЗУ.
  * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
  */
 
@@ -17,18 +18,42 @@ if (parentPort) {
         const focusedSlotIdStr = String(incomingTask.P1 || "102");
         const name = String(keyPayload.name || "");
         const sequence = String(keyPayload.sequence || "");
+        
+        let targetDestinationSlotIdStr = focusedSlotIdStr;
         let action = null;
         let payload = null;
         
-        // 1. ДЕТЕКЦИЯ КОМБИНАЦИЙ ALT + ЦИФРА (Alt+1 ... Alt+6)
-        if (name.length === 5 && name.startsWith("alt+")) {
+        const isFKey = name.length >= 2 && name.startsWith("f");
+        
+        // =================================================================
+        // КОНТУР 1: ВЕРХOВНАЯ ВЕКТОРИЗАЦИЯ С СОХРАНЕНИЕМ МОДИФИКАТOРOВ
+        // =================================================================
+        if (isFKey === true) {
+            const fKeyNum = parseInt(name.substring(1), 10) || 0;
+            if (fKeyNum >= 1 && fKeyNum <= 10) {
+                action = "FN_KEY_CLICKED";
+                
+                // ИСПРАВЛЕНИЕ: Намертво запечатываем физический статус кнопок в payload
+                payload = { 
+                    keyNumber: fKeyNum,
+                    ctrl: keyPayload.ctrl === true,
+                    shift: keyPayload.shift === true,
+                    meta: keyPayload.meta === true
+                };
+                Object.preventExtensions(payload);
+                
+                targetDestinationSlotIdStr = "104"; 
+            }
+        }
+        // 2. ДЕТЕКЦИЯ КОМБИНАЦИЙ ALT + ЦИФРА (Alt+1 ... Alt+6)
+        else if (name.length === 5 && name.startsWith("alt+")) {
             const digitChar = name.charAt(4);
             if (digitChar >= "1" && digitChar <= "6") {
                 action = "FOCUS_CHANGED_BY_NUMBER";
                 payload = Math.floor(parseInt(digitChar, 10) || 1);
             }
         } 
-        // 2. СТАНДАРТНЫЙ НАВИГАЦИОННЫЙ И СЛУЖЕБНЫЙ МАРШАЛИНГ СТДИН
+        // 3. СТАНДАРТНЫЙ НАВИГАЦИОННЫЙ И СЛУЖЕБНЫЙ МАРШАЛИНГ СТДИН
         else if (name === "tab") {
             if (focusedSlotIdStr === "105") {
                 action = "TAB_COMPLETION_REQUEST";
@@ -45,22 +70,22 @@ if (parentPort) {
             action = "ENTER_PRESSED";
         } else if (name === "backspace") {
             action = "BACKSPACE_PRESSED";
-        } else if (name === "f3") {
-            action = "SYSTEM_ACTION_BYPASS";
-            payload = "F3_MACRO";
-        } else if (name === "f4") {
-            action = "SYSTEM_ACTION_BYPASS";
-            payload = "F4_MACRO";
         } 
-        // 3. ТРАНСЛЯЦИЯ СЫРЫХ ПАКЕТОВ ВВОДА ДЛЯ ОБРАБОТКИ ПРИБОРОМ КАНАЛА 4
-        else if (focusedSlotIdStr === "105") {
+        // 4. ТРАНСЛЯЦИЯ СЫРЫХ ПАКЕТОВ ВВОДА С УЧЕТОМ СТЕКА МОДИФИКАТOРOВ
+        else {
             let targetChar = "";
             if (sequence.length > 0) { targetChar = sequence; }
             else if (name.length === 1) { targetChar = name; }
             
             if (targetChar.length > 0) {
                 action = "KEY_PRESSED";
-                payload = { char: targetChar };
+                payload = { 
+                    char: targetChar,
+                    ctrl: keyPayload.ctrl === true,
+                    shift: keyPayload.shift === true,
+                    meta: keyPayload.meta === true
+                };
+                Object.preventExtensions(payload);
             }
         }
         
@@ -71,7 +96,7 @@ if (parentPort) {
             const s = String(now.getSeconds()).padStart(2, "0");
 
             const printableKeyStr = (payload && typeof payload === "object" && payload.char) ? payload.char : name;
-            const logMsgStr = "[" + h + ":" + m + ":" + s + " Msk] [INPUT_KEYBOARD] Клавиша: '" + printableKeyStr + "' | Направлено в Слот: " + focusedSlotIdStr + "\n";
+            const logMsgStr = "[" + h + ":" + m + ":" + s + " Msk] [INPUT_KEYBOARD] Клавиша: '" + printableKeyStr + "' | Направлено в Слот: " + targetDestinationSlotIdStr + "\n";
             
             const logPack = {
                 action: "LOG_ENTRY_PENDING",
@@ -82,7 +107,7 @@ if (parentPort) {
             const resPack = {
                 action: "KEYBOARD_ACTION_READY",
                 payload: {
-                    slotId: focusedSlotIdStr,
+                    slotId: targetDestinationSlotIdStr, 
                     intent: "EXECUTE_RESOLVED_KEY",
                     action: action,
                     payload: payload
@@ -93,7 +118,7 @@ if (parentPort) {
 
         const releasePack = {
             action: "KEYBOARD_FACILITY_RELEASE_READY",
-            payload: { slotId: focusedSlotIdStr, intent: "RELEASE_KEYBOARD_FACILITY" }
+            payload: { slotId: targetDestinationSlotIdStr, intent: "RELEASE_KEYBOARD_FACILITY" }
         };
         parentPort.postMessage(releasePack);
     });
@@ -102,5 +127,5 @@ if (parentPort) {
 /** 
  * ПАСПОРТ ЛИСТИНГА:
  * Путь: src/app/workers/keyboard_worker.js
- * Время изменения: 05.09.2026 12:45:10 MSK
+ * Время изменения: 16.09.2026 23:54:00 MSK
  */

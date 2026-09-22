@@ -1,0 +1,14 @@
+{
+  "active_provider": "floatrates",
+  "providers": {
+    "cbr": {
+      "url": "https://cbr-xml-daily.ru"
+    },
+    "frankfurter": {
+      "url": "https://frankfurter.dev"
+    },
+    "floatrates": {
+      "url": "https://floatrates.com"
+    }
+  }
+}

@@ -1,4 +1,4 @@
-/**
+    /**
  * @file src/core/smo/root_unit.js
  * @version 5.4.0-RELEASE-SMO-ROOT-UNIT-DASHBOARD-CLICK-HYDRATED
  * @description Системный СМО-прибор Слота 0 (Инициализатор/Гидратор).
@@ -67,46 +67,41 @@ export async function processSpecificRootLogic(facilityState, intentStr, context
             }
         }
 
-        // =================================================================
-        // ИСПРАВЛЕНИЕ: РЕГИСТРАЦИЯ КООРДИНАТ ТАБОВ ДЛЯ ВСЕХ ПАНЕЛЕЙ (101, 102, 103)
-        // =================================================================
-        const tabMenuFacility = _gpssEngineState.facilitiesRegistry.get("12");
-        if (tabMenuFacility) {
-            // Регистрируем вкладки Дашборда (Слот 101)
-            generateGpssTransaction("12", "REGISTRATION_TAB_SPACE", {
-                slotIdNum: 101, tabsCount: 2,
-                coords: [ { start: 2, end: 8 }, { start: 9, end: 17 } ]
-            }, "0");
+// =================================================================
+// ДОБАВЛЕНО: РЕГИСТРАЦИЯ КООРДИНАТ ТАБОВ ДЛЯ СЛOТА 200 И ОСТАЛЬНЫХ
+// =================================================================
+const tabMenuFacility = _gpssEngineState.facilitiesRegistry.get("12");
+if (tabMenuFacility) {
+    // Регистрируем вкладки Глобального Модификатора (Слот 200)
+    // " DEFAULT " (2..10), " CTRL " (12..19), " SHIFT " (21..29), " ALT " (31..37)
+    generateGpssTransaction("12", "REGISTRATION_TAB_SPACE", {
+        slotIdNum: 200, tabsCount: 4,
+        coords: [ 
+            { start: 2, end: 10 }, 
+            { start: 12, end: 19 }, 
+            { start: 21, end: 29 }, 
+            { start: 31, end: 37 } 
+        ]
+    }, "0");
 
-            // Регистрируем вкладки Левого Проводника (Слот 102)
-            generateGpssTransaction("12", "REGISTRATION_TAB_SPACE", {
-                slotIdNum: 102, tabsCount: 4,
-                coords: [ { start: 2, end: 7 }, { start: 8, end: 13 }, { start: 14, end: 19 }, { start: 20, end: 25 } ]
-            }, "0");
+    // Регистрируем вкладки Дашборда (Слот 101)
+    generateGpssTransaction("12", "REGISTRATION_TAB_SPACE", {
+        slotIdNum: 101, tabsCount: 2,
+        coords: [ { start: 2, end: 8 }, { start: 9, end: 17 } ]
+    }, "0");
 
-            // Регистрируем вкладки Правого Проводника (Слот 103)
-            generateGpssTransaction("12", "REGISTRATION_TAB_SPACE", {
-                slotIdNum: 103, tabsCount: 3,
-                coords: [ { start: 2, end: 8 }, { start: 9, end: 15 }, { start: 16, end: 22 } ]
-            }, "0");
-        }
+    // Регистрируем вкладки Левого Проводника (Слот 102)
+    generateGpssTransaction("12", "REGISTRATION_TAB_SPACE", {
+        slotIdNum: 102, tabsCount: 4,
+        coords: [ { start: 2, end: 7 }, { start: 8, end: 13 }, { start: 14, end: 19 }, { start: 20, end: 25 } ]
+    }, "0");
 
-        kernel.model.logicalState.focusedSlotId = "105";
-
-        enterAlternativeHardwareBuffer();
-        if (process.stdin.listeners("data").length === 0) listenHardwareInterrupts(kernel);
-
-        generateGpssTransaction("9", "FORCE_RECALCULATE_LAYOUT", {
-            width: kernel.width || 120,
-            height: kernel.height || 30
-        }, "0");
-
-        const sidebarH = Math.max(10, Math.floor((kernel.height || 30) * 0.60));
-        const maxVisibleThemesRows = Math.max(1, sidebarH - 5);
-        
-        generateGpssTransaction("14", "SYNC_SCROLLBAR_METRICS", {
-            targetSlotId: "106", totalItems: totalThemesCount, maxVisibleRows: maxVisibleThemesRows
-        }, "0");
+    // Регистрируем вкладки Правого Проводника (Слот 103)
+    generateGpssTransaction("12", "REGISTRATION_TAB_SPACE", {
+        slotIdNum: 103, tabsCount: 3,
+        coords: [ { start: 2, end: 8 }, { start: 9, end: 15 }, { start: 16, end: 22 } ]
+    }, "0");
+}
 
         const gateway = kernel.workerGateway;
         if (gateway && typeof gateway.triggerDirectoryIndexing === "function") {

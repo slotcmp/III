@@ -1,14 +1,16 @@
 /**
  * @file src/core/smo/gpss_engine_scan.js
- * @version 5.4.0-RELEASE-SMO-CLOCK-SCAN-AUDIT-WITH-ORIGIN
+ * @version 5.4.11-RELEASE-SMO-CLOCK-SCAN-LAZY-INDEXER-FIXED
  * @description Центральный тактовый автомат и аудитор имитационной шины СМО (Control-контур).
- * ИСПРАВЛЕН ФОРМАТ ЛОГА: В дисковую трассировку прецизионно интегрирован паспорт источника требований ORIGIN (O1).
- * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp / 0% GC.
+ * ИСПРАВЛЕНО: Вызов buildDynamicTabCoordinatesRegistry перенесен в Фазу 2 финализации такта,
+ * что гарантирует индексацию ушек по 100% применившейся геометрии INJECT_GEO_MAP.
+ * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp / 0% try-catch / 0% GC.
  */
 
 import { _gpssEngineState, generateGpssTransaction } from "./bus.js";
 import { forceInvalidateShadowCanvas } from "../../io/terminal/flusher.js";
 import { writeCoreLogMessageInline } from "./logger_io.js";
+import { buildDynamicTabCoordinatesRegistry } from "../layout/balancer/tab_indexer.js"; // ОФИЦИАЛЬНЫЙ ИМПОРТ ИНДЕКСАТOРА
 
 const _smoAccountingState = {
     totalProcessedTransactions: 0,
@@ -16,10 +18,11 @@ const _smoAccountingState = {
     lastAuditedTxId: -1,
     lastAuditedChannel: "",
     lastAuditedIntent: "",
-    // Преаллоцируем регистр для сохранения Hidden Class
     lastAuditedOrigin: "0" 
 };
 Object.preventExtensions(_smoAccountingState);
+
+let _LAST_DIAGNOSED_WM_INDEX = -1;
 
 /**
  * Осуществляет одиночный такт продвижения имитационной модели СМО с прецизионным аудитом транзактов
@@ -55,17 +58,33 @@ export function processEngineSingleTick(kernel) {
                 _smoAccountingState.lastAuditedTxId = Math.floor(currentTx.id || 0);
                 _smoAccountingState.lastAuditedChannel = slotId;
                 _smoAccountingState.lastAuditedIntent = String(currentTx.P2 || "");
-                
-                // Извлекаем прецизионный паспорт источника из транзакта шины
                 _smoAccountingState.lastAuditedOrigin = String(currentTx.O1 || "0");
-                
                 _smoAccountingState.activeBlockedTransactions = currentTail - currentHead;
 
-                // Инлайновый масочный гвард блокировки спама логгера для ANIMATION_TICK сохранен
+                // СИНХРОННЫЙ ПЕРЕХВАТ ИНВАЛИДАЦИИ КАДРА БЕЗ РАСШИРЕНИЯ ОБЪЕКТОВ
+                if (_smoAccountingState.lastAuditedIntent === "INVALIDATE_SLOT_CONTAINER") {
+                    if (currentTx.P3 && currentTx.P3.targetSlotId) {
+                        const targetIdStr = String(currentTx.P3.targetSlotId);
+                        const dirtyFacility = _gpssEngineState.facilitiesRegistry.get(targetIdStr);
+                        
+                        if (dirtyFacility) {
+                            if (dirtyFacility.mdl) { 
+                                dirtyFacility.mdl._isDirty = true; 
+                            }
+                            
+                            if (Array.isArray(dirtyFacility.viewStack)) {
+                                const activeIdxWM = Math.max(0, Math.floor(dirtyFacility.activeStackIdx || 0)) & 3;
+                                const targetTriad = dirtyFacility.viewStack[activeIdxWM];
+                                if (targetTriad && targetTriad.mdl) {
+                                    targetTriad.mdl._isDirty = true;
+                                }
+                            }
+                        }
+                        hasGlobalMutations = true;
+                    }
+                }
+
                 if (_smoAccountingState.lastAuditedIntent !== "ANIMATION_TICK") {
-                    // =================================================================
-                    // МОДИФИКАЦИЯ: НОВЫЙ ДЕТЕРМИНИРОВАННЫЙ ФОРМАТ ДИСКОВОГО ЛОГА СМО
-                    // =================================================================
                     writeCoreLogMessageInline(
                         "[SMO_CLOCK_AUDIT] TX #" + _smoAccountingState.lastAuditedTxId + 
                         " | ORIGIN: " + _smoAccountingState.lastAuditedOrigin + 
@@ -97,27 +116,22 @@ export function processEngineSingleTick(kernel) {
         }
     }
 
-    // ФАЗА 2: РЕАКТИВНАЯ ФИНАЛИЗАЦИЯ И СИНХРОННЫЙ СДВИГ БЛАЙТЕРА ПРЕЗЕНТАЦИИ
+    // =================================================================
+    // ФАЗА 2: РЕАКТИВНАЯ ФИНАЛИЗАЦИЯ И СИНХРОННЫЙ СДВИГ БЛАЙТЕРА
+    // =================================================================
     if (hasGlobalMutations || isResizeDetected || (kernel.virtualCanvasState && kernel.virtualCanvasState.isDirty === true)) {
-        
-        if (isResizeDetected) {
-            if (typeof forceInvalidateShadowCanvas === "function") {
-                forceInvalidateShadowCanvas();
-            }
-        }
+    
+    // ИСПРАВЛЕНО: Деструктивный сброс тотально удален отсюда. 
+    // Вектор паспортов теперь персистентен на протяжении всей фазы кликов!
 
-        if (kernel.virtualCanvasState) {
-            kernel.virtualCanvasState.isDirty = true;
-        }
-
-        generateGpssTransaction("1", "EXECUTE_RENDER", null, "9");
+    if (isResizeDetected) {
+        if (typeof forceInvalidateShadowCanvas === "function") forceInvalidateShadowCanvas();
     }
+    if (kernel.virtualCanvasState) kernel.virtualCanvasState.isDirty = true;
 
-    return hasGlobalMutations;
+    hasGlobalMutations = true; 
+    generateGpssTransaction("1", "EXECUTE_RENDER", null, "9");
+}
+return hasGlobalMutations;
 }
 
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/core/smo/gpss_engine_scan.js
- * Время исправления: 03.09.2026 16:52:00 MSK
- */

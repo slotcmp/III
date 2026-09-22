@@ -1,100 +1,70 @@
 /**
  * @file src/system/tab_menu/tab_menu_ctl.js
- * @version 1.0.0-RELEASE-SMO-SYS-TAB-MENU-CTL
- * @description Системный WM-контроллер обслуживания Канала 12 (Infrastructure).
- * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
+ * @version 11.6.5-RELEASE-SMO-TAB-MENU-TOTAL-IDD
+ * @description Системный контроллер Канала 12. Реализован суверенный IDD-перехват SWITCH_SLOT_TAB.
+ * Выполнен в строгой парадигме PAC / DOD / Zero Allocation / 0% GC.
  */
-
-import { generateGpssTransaction, _gpssEngineState } from "../../core/smo/bus.js";
-import { forceInvalidateShadowCanvas } from "../../io/terminal/flusher.js";
+import { _gpssEngineState } from "../../core/smo/bus.js";
+import { reduceMouseClick } from "../../core/smo/window_manager_intents/mouse_click_reducer.js";
 
 export function processSystemTabLogic(facilityState, intentStr, contextPayload, currentTx) {
-    if (!contextPayload) return false;
-
-    const m = facilityState.mdl;
-    if (!m) return false;
-
     const intent = String(intentStr || "");
+    const payload = contextPayload || (currentTx ? currentTx.P3 : null);
+    const m12 = facilityState?.mdl;
 
-    // Конфигурация координатной сетки при пуске ядра
-    if (intent === "REGISTRATION_TAB_SPACE") {
-        const slotId = Math.floor(contextPayload.slotIdNum || 0) & 255;
-        const count = Math.max(0, Math.floor(contextPayload.tabsCount || 0)) & 15;
-        
-        m.tabsCountRegistry[slotId] = count;
-        const offset = slotId * 32;
-        const srcCoords = contextPayload.coords;
+    if (!m12 || !m12.activeTabRegistry) return false;
 
-        if (Array.isArray(srcCoords)) {
-            for (let i = 0; i < count; i++) {
-                if (srcCoords[i]) {
-                    m.coordinatesBuffer[offset + (i * 2)] = Math.floor(srcCoords[i].start || 0);
-                    m.coordinatesBuffer[offset + (i * 2) + 1] = Math.floor(srcCoords[i].end || 0);
-                }
-            }
-        }
-        return false;
-    }
-
-    const targetSlotIdStr = String(contextPayload.targetSlotId || "");
-    const slotId = Math.floor(parseInt(targetSlotIdStr, 10) || 0) & 255;
-    if (slotId === 0) return false;
-
-    const hostFacility = _gpssEngineState.facilitiesRegistry.get(targetSlotIdStr);
-    if (!hostFacility || !Array.isArray(hostFacility.viewStack)) return false;
-
-    const tabsCount = m.tabsCountRegistry[slotId];
-    let activeIdx = Math.max(0, Math.floor(hostFacility.activeStackIdx || 0));
-    let nextIdx = activeIdx;
-
-    if (intent === "TAB_CLICKED") {
-        const localX = Math.floor(contextPayload.localX || 0);
-        const offset = slotId * 32;
-
-        for (let t = 0; t < tabsCount; t++) {
-            const startX = m.coordinatesBuffer[offset + (t * 2)];
-            const endX = m.coordinatesBuffer[offset + (t * 2) + 1];
-
-            if (localX >= startX && localX < endX) {
-                nextIdx = t;
-                break;
-            }
-        }
-    } 
-    else if (intent === "SCROLL_TABS_DOWN") {
-        nextIdx = (activeIdx + 1) % hostFacility.viewStack.length;
-    } 
-    else if (intent === "SCROLL_TABS_UP") {
-        const total = hostFacility.viewStack.length;
-        nextIdx = (activeIdx - 1 + total) % total;
-    }
-
-    if (nextIdx !== activeIdx) {
-        hostFacility.activeStackIdx = nextIdx;
-        m.activeTabRegistry[slotId] = nextIdx;
-        
-        const kernel = _gpssEngineState.runtime;
-        
-        if (String(hostFacility.componentType) === "explorer" && kernel?.workerGateway) {
-            const nextMdl = hostFacility.viewStack[nextIdx].mdl;
-            if (nextMdl) {
-                kernel.workerGateway.triggerDirectoryIndexing(targetSlotIdStr, nextMdl.currentDirectoryPath, nextIdx);
-            }
-        }
-
-        if (kernel) {
-            if (kernel.virtualCanvasState) kernel.virtualCanvasState.isDirty = true;
-            const currentMdl = hostFacility.viewStack[nextIdx].mdl;
-            if (currentMdl) currentMdl._isDirty = true;
-        }
-
-        if (typeof forceInvalidateShadowCanvas === "function") {
-            forceInvalidateShadowCanvas();
-        }
-
-        generateGpssTransaction(targetSlotIdStr, "SWITCH_SLOT_TAB", { targetStackIdx: nextIdx }, "12");
-        generateGpssTransaction("1", "EXECUTE_RENDER", null, "12");
+    // =================================================================
+    // 1. СУВЕРЕННЫЙ ПЕРЕХВАТ МОДИФИКАТОРОВ (СЛОТ 200 / 104)
+    // =================================================================
+    if (intent === "KEYBOARD_MODIFIER_CHANGED" && payload) {
+        const targetModifierIdx = (payload.modifierIdx || 0) | 0;
+        m12.activeTabRegistry[104] = targetModifierIdx;
+        m12.activeTabRegistry[200] = targetModifierIdx;
+        m12._isDirty = true;
         return true;
+    }
+
+    // =================================================================
+    // 2. ИСПРАВЛЕНО: СУВЕРЕННЫЙ ПЕРЕХВАТ ПРОКРУТКИ ВКЛАДОК ОКOН (102, 103, 106)
+    // =================================================================
+    if (intent === "SWITCH_SLOT_TAB" && payload) {
+        // Извлекаем, какому именно прибору предназначался свитч (по умолчанию 102)
+        const targetSlotIdStr = String(currentTx?.P1 || payload.targetSlotId || "102");
+        
+        if (targetSlotIdStr !== "104" && targetSlotIdStr !== "200") {
+            const slotNum = parseInt(targetSlotIdStr, 10) & 255;
+            const targetTabIdx = (payload.targetStackIdx || 0) | 0;
+
+            // Канал 12 САМ фиксирует индекс в своем Uint8Array и объявляет себя грязным!
+            m12.activeTabRegistry[slotNum] = targetTabIdx;
+            m12._isDirty = true;
+            return true;
+        }
+    }
+
+    // =================================================================
+    // 3. КОНТУР ФИЗИЧЕСКИХ КЛИКОВ МЫШИ (TAB_CLICKED)
+    // =================================================================
+    if (intent === "TAB_CLICKED" && payload) {
+        const localY = Math.floor(payload.localY || 0);
+
+        if (localY === 0) {
+            const targetFacility200 = _gpssEngineState.facilitiesRegistry.get("200");
+            if (targetFacility200) {
+                m12.activeTabRegistry[200] = (targetFacility200.activeStackIdx || 0) | 0;
+                return reduceMouseClick(targetFacility200, payload);
+            }
+        } 
+        else {
+            const targetSlotIdStr = String(payload.targetSlotId || "102");
+            const targetFacility = _gpssEngineState.facilitiesRegistry.get(targetSlotIdStr);
+            if (targetFacility) {
+                const slotNum = parseInt(targetSlotIdStr, 10) & 255;
+                m12.activeTabRegistry[slotNum] = (targetFacility.activeStackIdx || 0) | 0;
+                return reduceMouseClick(targetFacility, payload);
+            }
+        }
     }
 
     return false;

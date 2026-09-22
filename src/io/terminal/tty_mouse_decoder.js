@@ -1,20 +1,14 @@
 /**
  * @file src/io/terminal/tty_mouse_decoder.js
- * @version 2.5.4-RELEASE-GOLDEN-MONOMORPHIC-STATE-REDIRECT-FIXED
+ * @version 2.5.5-RELEASE-SMO-MOUSE-DECOUPLED-COORDS-PRESERVED
  * @description Мономорфный посимвольный декодер SGR-пакетов мыши (PAC / Control-контур).
- * ИСПРАВЛЕНА СИНТАКСИЧЕСКАЯ ОШИБКА: Импорт _scannerState перенаправлен на tty_scanner_state.js.
- * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp.
+ * ИСПРАВЛЕНО: Удалено преждевременное затирание координат mX и mY при отпускании кнопки (m).
+ * Выполнен в строгой парадигме PAC / DOD / 0% OOP / 0% RegExp / Zero Allocation.
  */
 
-// ИСПРАВЛЕНИЕ: Перенаправляем точку импорта регистра на изолированный стейт-файл
 import { _scannerState } from "./tty_scanner_state.js";
 import { parseAndDispatchSgr } from "./tty_mouse_parser.js";
 
-/**
- * Разбор параметров "button;X;Y" SGR-пакета мыши в потоке ввода терминала
- * @param {number} byte Текущий считываемый байт из чанка ввода stdin
- * @param {Object} kernel Ссылка на ОЗУ-рантайм ядра хоста
- */
 export function processSgrMouseState(byte, kernel) {
     if (byte === 0x3b) { 
         _scannerState._paramIdx++; 
@@ -33,18 +27,23 @@ export function processSgrMouseState(byte, kernel) {
         return;
     }
     
+    // М — нажатие / скролл, m — отпускание кнопки
     if (byte === 0x4d || byte === 0x6d) {
         const finalBtn = _scannerState.btnCode;
         const finalX = _scannerState.mX;
         const finalY = _scannerState.mY;
         const isReleaseBool = (byte === 0x6d);
 
+        // Переводим автомат в базовое состояние готовности к новому пакету
         _scannerState.state = 0;
-        _scannerState.btnCode = 0;
-        _scannerState.mX = 0;
-        _scannerState.mY = 0;
         _scannerState._paramIdx = 0;
         _scannerState.isRelease = isReleaseBool;
+
+        // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: СОХРАНЯЕМ КООРДИНАТЫ!
+        // Мы больше НЕ зануляем _scannerState.mX и mY здесь в ноль,
+        // позволяя асинхронной шине легитимно считать точку клика отпускания.
+        // Они перезапишутся естественным образом при следующем движении/нажатии мыши.
+        _scannerState.btnCode = 0; 
 
         if (typeof parseAndDispatchSgr === "function") {
             parseAndDispatchSgr(
@@ -58,9 +57,3 @@ export function processSgrMouseState(byte, kernel) {
         }
     }
 }
-
-/** 
- * ПАСПОРТ ЛИСТИНГА:
- * Путь: src/io/terminal/tty_mouse_decoder.js
- * Время исправления: 03.09.2026 12:20:10 MSK
- */
